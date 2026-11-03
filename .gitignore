@@ -8,3 +8,4 @@ web/build/
 dist/
 *.log
 .DS_Store
+!evidence/*.log

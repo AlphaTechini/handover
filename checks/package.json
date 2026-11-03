@@ -1,0 +1,27 @@
+{
+  "name": "checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:1": "tsx 01-funding.ts",
+    "check:2": "tsx 02-mpc-sign.ts",
+    "check:3": "tsx 03-address-agreement.ts",
+    "check:4": "tsx 04-omni-tx.ts",
+    "check:5": "tsx 05-end-to-end.ts",
+    "check:6": "tsx 06-sepolia-rpc.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@handover/cleancheck": "workspace:*",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@scure/base": "^2.4.0",
+    "chainsig.js": "^1.1.16",
+    "viem": "^2.57.16"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3"
+  }
+}
