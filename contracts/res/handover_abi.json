@@ -1,0 +1,1296 @@
+{
+  "schema_version": "0.4.0",
+  "metadata": {
+    "name": "handover",
+    "version": "0.1.0",
+    "build": {
+      "compiler": "rustc 1.97.0",
+      "builder": "cargo-near cargo-near-build 0.11.5"
+    },
+    "wasm_hash": "H9rva1M4j9xvaFXo5ZjjLCvwf6xj9rBftdEQ98ueimkj"
+  },
+  "body": {
+    "functions": [
+      {
+        "name": "buy",
+        "doc": " Buy a listed token. Attach at least the price; the excess is refunded to the buyer.\n\n Everything happens in this one call (risk 4): the listing is removed, the NFT moves to\n the buyer (approvals are cleared by the standard transfer), and the seller is paid\n exactly `price`. If any step panics the whole call reverts.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "contract_source_metadata",
+        "kind": "view"
+      },
+      {
+        "name": "delist",
+        "doc": " Remove the listing and unfreeze signing. Owner only, exactly 1 yocto.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "get_config",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/ConfigView"
+          }
+        }
+      },
+      {
+        "name": "get_listing",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/ListingView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_sig_log",
+        "doc": " Signature log ordered by nonce ascending. `limit` defaults to 50, capped at 100.",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "from_index",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "limit",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/SignedTxView"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_wallet",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/WalletView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "list",
+        "doc": " List the token for `price` yoctoNEAR. Owner only, exactly 1 yocto.\n\n Rejected while a signature is in flight or a reserved transaction is pending: listing\n then would let a signature appear after the buyer's clean check.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "price",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "list_listings",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "from_index",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "limit",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/ListingView"
+            }
+          }
+        }
+      },
+      {
+        "name": "new",
+        "doc": " Initialise. There is deliberately no owner/admin concept afterwards: nothing can change\n `mpc_contract_id` or `chain_id`, and there is no upgrade method.",
+        "kind": "call",
+        "modifiers": [
+          "init"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "mpc_contract_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "chain_id",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "nft_approve",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "msg",
+              "type_schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Promise"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "nft_is_approved",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "approved_account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "approval_id",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "nft_metadata",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/NFTContractMetadata"
+          }
+        }
+      },
+      {
+        "name": "nft_mint",
+        "doc": " Mint the next sequential token (\"0\", \"1\", ...) to the caller.\n\n Requires `MINT_FEE`; charges the measured storage cost and refunds the excess.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Token"
+          }
+        }
+      },
+      {
+        "name": "nft_resolve_transfer",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "previous_owner_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "receiver_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "approved_account_ids",
+              "type_schema": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0.0
+                }
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "nft_revoke",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "nft_revoke_all",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "nft_supply_for_owner",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "nft_token",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Token"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "nft_tokens",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "from_index",
+              "type_schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            {
+              "name": "limit",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/Token"
+            }
+          }
+        }
+      },
+      {
+        "name": "nft_tokens_for_owner",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "from_index",
+              "type_schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            {
+              "name": "limit",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/Token"
+            }
+          }
+        }
+      },
+      {
+        "name": "nft_total_supply",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "nft_transfer",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "receiver_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "approval_id",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "memo",
+              "type_schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "nft_transfer_call",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "receiver_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "approval_id",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "memo",
+              "type_schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            {
+              "name": "msg",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/PromiseOrValueBoolean"
+          }
+        }
+      },
+      {
+        "name": "on_signed",
+        "doc": " MPC callback. NEVER panics once authorised: every parse/validation problem is treated as\n a failed attempt that leaves the reservation in place (decision D1).\n\n `#[private]` is enforced only in the compiled wasm wrapper, not in unit tests, so the\n explicit predecessor check below makes the same rule testable and survives refactors.",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "nonce",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "callbacks": [
+          {
+            "serialization_type": "json",
+            "type_schema": {
+              "$ref": "#/definitions/SignatureResponse"
+            }
+          }
+        ],
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/SignedTxView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "request_transfer",
+        "doc": " Ask MPC to sign a plain ETH transfer from this token's address. Owner only.\n\n Deposit: at least `SIGN_FEE` (0.01 NEAR). Exactly 1 yocto is forwarded to MPC; the rest of\n `SIGN_FEE` stays here to pay for the log/reservation storage; anything above `SIGN_FEE` is\n refunded to the caller. Attach 300 Tgas. Returns the logged `SignedTxView` (via callback)\n or null if signing failed (then call `retry_reserved`).\n\n There is intentionally NO parameter for calldata, access list, or chain id.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "to",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "value_wei",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "gas_limit",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "max_fee_per_gas",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "max_priority_fee_per_gas",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      },
+      {
+        "name": "retry_reserved",
+        "doc": " Re-request a signature for the exact transaction reserved by an earlier attempt whose\n MPC call failed or timed out. Owner only; same deposit rules as `request_transfer`.\n Any signature for the reserved payload authorises the identical transaction, so it does\n not matter which of several signatures gets broadcast: only one can ever be mined.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Promise"
+          }
+        }
+      }
+    ],
+    "root_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "String",
+      "type": "string",
+      "definitions": {
+        "Base64VecU8": {
+          "description": "Helper class to serialize/deserialize `Vec<u8>` to base64 string.\n\n# Example ```rust use near_sdk::{json_types::Base64VecU8, near};\n\n#[near(serializers=[json])] struct NewStruct { field: Base64VecU8, } ```",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          }
+        },
+        "ConfigView": {
+          "type": "object",
+          "required": [
+            "chain_id",
+            "mint_fee",
+            "mpc_contract_id",
+            "path_prefix",
+            "sign_fee"
+          ],
+          "properties": {
+            "chain_id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "mint_fee": {
+              "type": "string"
+            },
+            "mpc_contract_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "path_prefix": {
+              "type": "string"
+            },
+            "sign_fee": {
+              "type": "string"
+            }
+          }
+        },
+        "K256AffinePoint": {
+          "type": "object",
+          "required": [
+            "affine_point"
+          ],
+          "properties": {
+            "affine_point": {
+              "description": "33-byte compressed point as hex: `02|03` prefix + 32-byte x. x is the signature `r`.",
+              "type": "string"
+            }
+          }
+        },
+        "K256Scalar": {
+          "type": "object",
+          "required": [
+            "scalar"
+          ],
+          "properties": {
+            "scalar": {
+              "description": "32-byte scalar as hex.",
+              "type": "string"
+            }
+          }
+        },
+        "ListingView": {
+          "type": "object",
+          "required": [
+            "listed_at_ns",
+            "price",
+            "seller_id",
+            "token_id"
+          ],
+          "properties": {
+            "listed_at_ns": {
+              "type": "string"
+            },
+            "price": {
+              "type": "string"
+            },
+            "seller_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "token_id": {
+              "type": "string"
+            }
+          }
+        },
+        "NFTContractMetadata": {
+          "description": "Metadata for the NFT contract itself.",
+          "type": "object",
+          "required": [
+            "name",
+            "spec",
+            "symbol"
+          ],
+          "properties": {
+            "base_uri": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "icon": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "reference": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reference_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "spec": {
+              "type": "string"
+            },
+            "symbol": {
+              "type": "string"
+            }
+          }
+        },
+        "Promise": true,
+        "PromiseOrValueBoolean": {
+          "type": "boolean"
+        },
+        "ReservedTxView": {
+          "type": "object",
+          "required": [
+            "attempts",
+            "gas_limit",
+            "max_fee_per_gas",
+            "max_priority_fee_per_gas",
+            "nonce",
+            "payload_hash_hex",
+            "requested_at_ns",
+            "to",
+            "value_wei"
+          ],
+          "properties": {
+            "attempts": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "gas_limit": {
+              "type": "string"
+            },
+            "max_fee_per_gas": {
+              "type": "string"
+            },
+            "max_priority_fee_per_gas": {
+              "type": "string"
+            },
+            "nonce": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "payload_hash_hex": {
+              "type": "string"
+            },
+            "requested_at_ns": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "value_wei": {
+              "type": "string"
+            }
+          }
+        },
+        "SignatureResponse": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "big_r",
+                "recovery_id",
+                "s",
+                "scheme"
+              ],
+              "properties": {
+                "big_r": {
+                  "$ref": "#/definitions/K256AffinePoint"
+                },
+                "recovery_id": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0.0
+                },
+                "s": {
+                  "$ref": "#/definitions/K256Scalar"
+                },
+                "scheme": {
+                  "type": "string",
+                  "enum": [
+                    "Secp256k1"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "SignedTxView": {
+          "type": "object",
+          "required": [
+            "gas_limit",
+            "max_fee_per_gas",
+            "max_priority_fee_per_gas",
+            "nonce",
+            "raw_signed_tx_hex",
+            "signed_at_ns",
+            "to",
+            "tx_hash",
+            "value_wei"
+          ],
+          "properties": {
+            "gas_limit": {
+              "type": "string"
+            },
+            "max_fee_per_gas": {
+              "type": "string"
+            },
+            "max_priority_fee_per_gas": {
+              "type": "string"
+            },
+            "nonce": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "raw_signed_tx_hex": {
+              "type": "string"
+            },
+            "signed_at_ns": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "tx_hash": {
+              "type": "string"
+            },
+            "value_wei": {
+              "type": "string"
+            }
+          }
+        },
+        "Token": {
+          "type": "object",
+          "required": [
+            "owner_id",
+            "token_id"
+          ],
+          "properties": {
+            "approved_account_ids": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TokenMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "owner_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "token_id": {
+              "type": "string"
+            }
+          }
+        },
+        "TokenMetadata": {
+          "type": "object",
+          "properties": {
+            "copies": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expires_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "extra": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "issued_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "media": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "media_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reference": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reference_hash": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Base64VecU8"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "starts_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "updated_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "WalletView": {
+          "type": "object",
+          "required": [
+            "in_flight",
+            "minted_at_ns",
+            "next_nonce",
+            "owner_id",
+            "path",
+            "sig_count",
+            "token_id"
+          ],
+          "properties": {
+            "in_flight": {
+              "type": "boolean"
+            },
+            "listing": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ListingView"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "minted_at_ns": {
+              "type": "string"
+            },
+            "next_nonce": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "owner_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "reserved": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReservedTxView"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sig_count": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "token_id": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}
