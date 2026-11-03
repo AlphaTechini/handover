@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanPanicMessage, decodeSuccessValue, extractOutcomeError, outcomeTxHash } from './errors';
+import { cleanPanicMessage, isWalletChangedError, decodeSuccessValue, extractOutcomeError, outcomeTxHash } from './errors';
 
 const failure = (msg: string) => ({ Failure: { ActionError: { index: 0, kind: { FunctionCallError: { ExecutionError: msg } } } } });
 
@@ -34,5 +34,12 @@ describe('outcome helpers', () => {
 		expect(outcomeTxHash({ transaction_outcome: { id: 'abc' } })).toBe('abc');
 		expect(outcomeTxHash({ transaction: { hash: 'def' } })).toBe('def');
 		expect(outcomeTxHash({})).toBeNull();
+	});
+});
+
+describe('isWalletChangedError', () => {
+	it('matches the contract buy rejection', () => {
+		expect(isWalletChangedError('Wallet changed since you checked it')).toBe(true);
+		expect(isWalletChangedError('Attach exactly the listed price')).toBe(false);
 	});
 });

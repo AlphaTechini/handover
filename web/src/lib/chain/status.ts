@@ -5,7 +5,8 @@ import {
 	fetchSigLog,
 	fetchWallet,
 	fromSignedTxView,
-	fromWalletView
+	fromWalletView,
+	signerRecoveryProblems
 } from '@handover/cleancheck';
 import { toSignedTx, toWalletState } from './convert';
 import { HANDOVER_CONTRACT, NEAR_RPC, SEPOLIA_RPC } from './config';
@@ -30,8 +31,11 @@ export async function getWalletStatus(tokenId: string): Promise<WalletStatus> {
 	const records = sigViews.map(fromSignedTxView);
 	const result = cleanCheck(fromWalletView(walletView), records, {
 		confirmedNonce: chainNonce,
-		pendingNonce: pendingChainNonce
+		pendingNonce: pendingChainNonce,
+		derivedAddress: address
 	});
+	// Every logged signature must recover to this wallet's address.
+	const signerProblems = signerRecoveryProblems(address, records);
 	return {
 		tokenId,
 		wallet: toWalletState(walletView),
@@ -39,8 +43,8 @@ export async function getWalletStatus(tokenId: string): Promise<WalletStatus> {
 		balanceWei,
 		chainNonce,
 		pendingChainNonce,
-		verdict: result.verdict,
-		reasons: result.reasons,
+		verdict: signerProblems.length > 0 ? 'inconsistent' : result.verdict,
+		reasons: signerProblems.length > 0 ? [...signerProblems, ...result.reasons] : result.reasons,
 		pending: result.pending as SignedTx[],
 		sigLog: sigViews.map(toSignedTx),
 		checkedAt: Date.now()

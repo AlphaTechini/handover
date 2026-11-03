@@ -59,6 +59,7 @@ describe('committed fixtures', () => {
       'dirty-pending.json',
       'inconsistent-hash-mismatch.json',
       'inconsistent-missing-nonce.json',
+      'inconsistent-wrong-signer.json',
     ]);
   });
 

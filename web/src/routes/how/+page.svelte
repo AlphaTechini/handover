@@ -13,6 +13,7 @@
 		{ id: 'invariant', label: 'The invariant' },
 		{ id: 'clean-check', label: 'The clean check' },
 		{ id: 'buying', label: 'Buying safely' },
+		{ id: 'recovery', label: 'Reserved and stuck requests' },
 		{ id: 'prior-art', label: 'What Handover adds' },
 		{ id: 'limits', label: 'Security model and limits' }
 	];
@@ -197,6 +198,12 @@
 					</div>
 				</div>
 
+				<p>
+					The check also recovers the signer of every transaction in the log. Each one must have been signed by the
+					wallet’s own key, and the address the contract recorded at the first signature must match the address derived
+					from the signing network. A transaction signed by any other key makes the wallet inconsistent.
+				</p>
+
 				<p>The verdict, evaluated in this order:</p>
 				<div class="vtable card">
 					<div class="vrow">
@@ -206,6 +213,10 @@
 					<div class="vrow">
 						<VerdictBadge verdict="busy" size="sm" />
 						<p>A signature request is in flight. A new signed transaction may appear at any moment.</p>
+					</div>
+					<div class="vrow">
+						<VerdictBadge verdict="busy" size="sm" />
+						<p>An <code>nft_transfer_call</code> has not resolved yet, so the owner may still change. Check again once it settles.</p>
 					</div>
 					<div class="vrow">
 						<VerdictBadge verdict="dirty" pending={1} size="sm" />
@@ -227,17 +238,32 @@
 					</li>
 					<li>
 						<span class="fi"><Icon name="shield-check" size={15} /></span>
-						<div><p class="ft">The buyer re-checks</p><p>The Buy button stays disabled until a clean check has passed in the last 60 seconds.</p></div>
+						<div><p class="ft">The buyer re-checks</p><p>The Buy button stays disabled until a clean check has passed in the last 60 seconds. The purchase carries the nonce that check saw, as <code>expected_next_nonce</code>.</p></div>
 					</li>
 					<li>
 						<span class="fi"><Icon name="swap" size={15} /></span>
-						<div><p class="ft">One call settles it</p><p><code>buy</code> transfers the NFT, pays the seller and clears the listing together. If any part fails, none of it happens.</p></div>
+						<div><p class="ft">One call settles it</p><p><code>buy</code> takes exactly the listed price, with no overpay. It transfers the NFT, pays the seller and clears the listing together. If the wallet signed anything since your check, or any part fails, none of it happens.</p></div>
 					</li>
 					<li>
 						<span class="fi"><Icon name="ban" size={15} /></span>
 						<div><p class="ft">The old owner is refused</p><p>The next signature request from the seller fails with the contract’s own error. The buyer’s first transfer goes through.</p></div>
 					</li>
 				</ul>
+			</section>
+
+			<section id="recovery">
+				<h2>Reserved transactions and stuck requests</h2>
+				<p>
+					Before the contract asks the signing network for a signature, it reserves the exact transaction for the next nonce.
+					If the attempt does not finish, a signature for it may still exist, so the reservation stays. The owner can only
+					retry that same transaction, and listing and selling are blocked until it is logged.
+				</p>
+				<p>
+					If the signing network never answers, the owner can call <code>release_stuck</code> after the release window of
+					NEAR blocks has passed. It frees the wallet from the pending request and keeps the same transaction reserved, so
+					nothing new can be signed in its place. The contract also records the signer address at the first signature and
+					treats any later signature from a different key as a failed attempt.
+				</p>
 			</section>
 
 			<section id="prior-art">
@@ -260,7 +286,7 @@
 						<ul>
 							<li><Icon name="plus" size={14} />A public, strictly sequential signature log</li>
 							<li><Icon name="plus" size={14} />Signing frozen while listed</li>
-							<li><Icon name="plus" size={14} />Only plain ETH transfers, built by the contract</li>
+							<li><Icon name="plus" size={14} />Only plain ETH transfers, built by the contract, with a fixed 21,000 gas limit</li>
 							<li><Icon name="plus" size={14} />A locked contract with no upgrade path</li>
 							<li><Icon name="plus" size={14} />Atomic payment and transfer, gated by a clean check</li>
 						</ul>

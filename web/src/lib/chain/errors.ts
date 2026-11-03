@@ -87,3 +87,8 @@ export function decodeSuccessValue<T>(outcome: any): T | null {
 	const text = new TextDecoder().decode(bytes);
 	return text === '' ? null : (JSON.parse(text) as T);
 }
+
+/** True when the contract refused a buy because the wallet moved after the buyer's clean check. */
+export function isWalletChangedError(message: string): boolean {
+	return /changed since you checked/i.test(message);
+}

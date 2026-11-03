@@ -10,7 +10,7 @@ import {
 } from '../src/rpc';
 import type { SignedTxView } from '../src/types';
 import { installMockRpc, type MockChainState } from './helpers/mock-rpc';
-import { syntheticTx, syntheticWallet, SYNTHETIC_ADDRESS, SYNTHETIC_CONTRACT } from './helpers/fixture';
+import { syntheticTx, syntheticWallet, wrongSignerTx, SYNTHETIC_ADDRESS, SYNTHETIC_CONTRACT } from './helpers/fixture';
 
 const NEAR = 'https://near.synthetic.test';
 const ETH = 'https://eth.synthetic.test';
@@ -211,5 +211,37 @@ describe('runCleanCheck', () => {
         address: SYNTHETIC_ADDRESS,
       }),
     ).rejects.toThrow(/unknown account/);
+  });
+});
+
+describe('runCleanCheck: signer recovery', () => {
+  const params = {
+    nearRpc: NEAR,
+    sepoliaRpc: ETH,
+    contractId: SYNTHETIC_CONTRACT,
+    tokenId: '0',
+  };
+
+  it('is inconsistent when a logged tx was signed by another key', async () => {
+    installMockRpc(
+      state({
+        sigLogs: { '0': [syntheticTx(0), wrongSignerTx(1), syntheticTx(2)] },
+        eth: { latest: 3, pending: 3, balance: 0n },
+      }),
+    );
+    const r = await runCleanCheck({ ...params, address: SYNTHETIC_ADDRESS });
+    expect(r.verdict).toBe('inconsistent');
+    expect(r.reasons[0]).toBe("Signed transaction at nonce 1 was not signed by this wallet's key.");
+  });
+
+  it('is inconsistent when the contract recorded a different eth_address', async () => {
+    installMockRpc(
+      state({
+        wallets: { '0': { ...syntheticWallet(3), eth_address: `0x${'ab'.repeat(20)}` } },
+        eth: { latest: 3, pending: 3, balance: 0n },
+      }),
+    );
+    const r = await runCleanCheck({ ...params, address: SYNTHETIC_ADDRESS });
+    expect(r.verdict).toBe('inconsistent');
   });
 });

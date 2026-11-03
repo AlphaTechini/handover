@@ -1,11 +1,12 @@
 // Regenerates the synthetic snapshot fixtures in this directory.
-// Every fixture is hand-made: signatures are fake, the address and recipient are placeholder
-// values, and the snapshot is labelled "synthetic": true. Tx hashes are keccak256 of the raw bytes.
+// Every fixture is hand-made. The transactions are REALLY signed, but by a throwaway test key
+// (private key 0x00..01, publicly known, controls nothing; address 0x7e5f...5bdf). The snapshot
+// address is that key's address so signer recovery passes. The recipient is a placeholder and the snapshot is labelled "synthetic": true. Tx hashes are keccak256 of the raw bytes.
 //   run: pnpm --filter @handover/cleancheck fixtures
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Snapshot } from '../../src/snapshot';
-import { range, syntheticSnapshot, syntheticTx } from '../helpers/fixture';
+import { range, syntheticSnapshot, syntheticTx, wrongSignerTx } from '../helpers/fixture';
 
 const dir = import.meta.dirname;
 
@@ -50,6 +51,13 @@ const fixtures: Record<string, Snapshot> = {
       syntheticTx(1),
       syntheticTx(2, { tx_hash: `0x${'ab'.repeat(32)}` }),
     ],
+    confirmedNonce: 3,
+    expect: 'inconsistent',
+  }),
+  // Nonce 1 was signed by a different key (0x...02) than the wallet address.
+  'inconsistent-wrong-signer.json': syntheticSnapshot({
+    nextNonce: 3,
+    sigLog: [syntheticTx(0), wrongSignerTx(1), syntheticTx(2)],
     confirmedNonce: 3,
     expect: 'inconsistent',
   }),

@@ -23,6 +23,8 @@ export interface ReservedTxView {
   payload_hash_hex: string;
   requested_at_ns: string;
   attempts: number;
+  /** NEAR block height of the signing request. Absent in old fixtures. */
+  requested_at_block?: number;
 }
 
 export interface WalletView {
@@ -36,6 +38,10 @@ export interface WalletView {
   minted_at_ns: string;
   /** Transaction reserved by a signing attempt that did not complete. Absent in old fixtures. */
   reserved?: ReservedTxView | null;
+  /** True while an nft_transfer_call is unresolved (the owner may change). Absent in old fixtures. */
+  transfer_call_pending?: boolean;
+  /** Trust-on-first-use signer address recorded by the contract (0x lowercase), or null. Absent in old fixtures. */
+  eth_address?: string | null;
 }
 
 export interface SignedTxView {
@@ -62,6 +68,10 @@ export interface WalletInput {
   listed: boolean;
   /** Set when a signing attempt for this nonce did not complete. */
   reserved?: { nonce: number } | null;
+  /** An nft_transfer_call is unresolved; the owner may change. */
+  transferCallPending?: boolean;
+  /** Address recorded by the contract at the first signature (trust on first use). */
+  ethAddress?: Hex | null;
 }
 
 export interface SignedTxRecord {
@@ -81,6 +91,11 @@ export interface ChainInput {
   confirmedNonce: number;
   /** Sepolia `eth_getTransactionCount(address, "pending")`, if known. */
   pendingNonce?: number;
+  /**
+   * The wallet address derived from the MPC public key. When given and `wallet.ethAddress` is set,
+   * the two must match (case-insensitive), otherwise the verdict is "inconsistent".
+   */
+  derivedAddress?: Hex;
 }
 
 export type Verdict = 'clean' | 'dirty' | 'busy' | 'inconsistent';

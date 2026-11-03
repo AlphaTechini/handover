@@ -1,6 +1,8 @@
 <script lang="ts">
 	import {
 		broadcast,
+		clampFees,
+		FIXED_GAS_LIMIT,
 		etherscanTx,
 		formatEth,
 		formatNear,
@@ -21,7 +23,8 @@
 	import { feeConfig, signFeeYocto } from './extras';
 	import { toast } from './toast.svelte';
 
-	const GAS_LIMIT = 21000n;
+	/** Fixed by the contract: plain transfers only, so the gas limit is not editable. */
+	const GAS_LIMIT = FIXED_GAS_LIMIT;
 
 	let {
 		tokenId,
@@ -157,9 +160,8 @@
 				tokenId,
 				to: to.trim() as Hex,
 				valueWei,
-				gasLimit: GAS_LIMIT,
-				maxFeePerGas: fees?.maxFeePerGas,
-				maxPriorityFeePerGas: fees?.maxPriorityFeePerGas
+				// The contract refuses a max fee below 1 gwei; clampFees raises it to the floor.
+				...(fees ? clampFees(fees) : {})
 			});
 		} catch (x) {
 			fail('sign', x);
@@ -267,7 +269,7 @@
 
 		<dl class="fees" id="{uid}-fee">
 			<div>
-				<dt>Gas limit</dt>
+				<dt>Gas limit (fixed)</dt>
 				<dd class="mono">21,000</dd>
 			</div>
 			<div>
@@ -299,7 +301,8 @@
 			{#if mode === 'refusal'}
 				The contract checks the caller against the NFT’s current owner before it asks for any signature.
 			{:else}
-				The contract only signs a plain ETH transfer it builds itself. Fees are set automatically from Sepolia.
+				The contract only signs a plain ETH transfer it builds itself, with a fixed gas limit of 21,000. Sending to a contract
+				that runs code when it receives ETH may fail. Fees are set automatically from Sepolia, never below 1 gwei.
 			{/if}
 		</p>
 	</form>

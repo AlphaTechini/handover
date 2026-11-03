@@ -1,4 +1,4 @@
-import type { SignedTxRecord, SignedTxView, WalletInput, WalletView } from './types';
+import type { Hex, SignedTxRecord, SignedTxView, WalletInput, WalletView } from './types';
 
 /** Maps the contract's WalletView to the clean-check input. `listed` is true when a listing exists. */
 export function fromWalletView(v: WalletView): WalletInput {
@@ -7,6 +7,8 @@ export function fromWalletView(v: WalletView): WalletInput {
     inFlight: v.in_flight,
     listed: v.listing != null,
     ...(v.reserved != null ? { reserved: { nonce: v.reserved.nonce } } : {}),
+    ...(v.transfer_call_pending ? { transferCallPending: true } : {}),
+    ...(v.eth_address != null ? { ethAddress: v.eth_address as Hex } : {}),
   };
 }
 

@@ -3,26 +3,33 @@
 	import { page } from '$app/state';
 	import {
 		broadcast,
+		blocksUntilRelease,
 		buyToken,
+		canReleaseStuck,
 		connectWallet,
+		currentBlockHeight,
 		delistToken,
 		etherscanAddress,
 		etherscanTx,
 		formatEth,
 		formatNear,
+		getConfig,
 		getWallet,
 		getWalletStatus,
 		HANDOVER_CONTRACT,
 		isConfigured,
+		isWalletChangedError,
 		listToken,
 		MPC_CONTRACT,
 		nearblocksAccount,
 		nearWallet,
 		nsToDate,
 		parseNear,
+		releaseStuck,
 		SEPOLIA_CHAIN_ID,
 		shortHex,
 		walletAddress,
+		type ContractConfig,
 		type SignedTx,
 		type Verdict,
 		type WalletStatus
@@ -75,6 +82,8 @@
 			address.reset();
 			check = null;
 			bought = false;
+			walletChanged = false;
+			height = null;
 			showTry = false;
 			status.load();
 			address.load();
@@ -102,13 +111,58 @@
 	const wasMine = $derived(!!account && !!w && !isOwner && previouslyOwned(account, w.tokenId));
 	const meta = $derived(s ? VERDICTS[s.verdict] : null);
 	const reserved = $derived(reservedOf(w));
+	const transferPending = $derived(w?.transferCallPending === true);
 	const blockedReason = $derived(
-		w?.inFlight
+		transferPending
+			? 'The NFT is in the middle of a transfer call.'
+			: w?.inFlight
 			? 'A signature request is in flight.'
 			: reserved
 				? `Signing attempt for nonce ${reserved.nonce} did not complete.`
 				: null
 	);
+
+	// release_stuck: only offered once the MPC request has outlived the contract's release window
+	let cfg = $state<ContractConfig | null>(null);
+	let height = $state<number | null>(null);
+	const canRelease = $derived(!!w && !!cfg && height !== null && canReleaseStuck(w, cfg, height));
+	const releaseWait = $derived(w && cfg && height !== null ? blocksUntilRelease(w, cfg, height) : null);
+
+	async function loadHeight() {
+		try {
+			[cfg, height] = await Promise.all([cfg ? Promise.resolve(cfg) : getConfig(), currentBlockHeight()]);
+		} catch {
+			/* the action simply stays hidden until the height is known */
+		}
+	}
+
+	$effect(() => {
+		if (!w?.inFlight) return;
+		void w.reserved?.requestedAtBlock;
+		untrack(loadHeight);
+		const t = setInterval(loadHeight, 15_000);
+		return () => clearInterval(t);
+	});
+
+	let releasing = $state(false);
+	async function doRelease() {
+		if (!w) return;
+		releasing = true;
+		try {
+			await releaseStuck(w.tokenId);
+			toast({
+				tone: 'success',
+				title: 'Request released',
+				message: 'The same transaction stays reserved. Retry the signature to finish it.'
+			});
+		} catch (x) {
+			const d = describeError(x, { contractCall: true });
+			toast({ tone: 'error', title: d.kind === 'refused' ? 'The contract refused to release' : 'Release failed', message: d.detail });
+		} finally {
+			releasing = false;
+			status.load();
+		}
+	}
 
 	let retrying = $state(false);
 	async function doRetry() {
@@ -217,7 +271,9 @@
 	}
 
 	// buy: an explicit re-check right before the call
-	let check = $state<{ verdict: Verdict; at: number; pending: number; priceYocto: string | null } | null>(null);
+	let check = $state<{ verdict: Verdict; at: number; pending: number; priceYocto: string | null; nextNonce: number } | null>(null);
+	/** The contract rejected the buy because the wallet signed after the check the buyer ran */
+	let walletChanged = $state(false);
 	let checking = $state(false);
 	let checkError = $state<unknown>(null);
 	let bought = $state(false);
@@ -225,21 +281,29 @@
 
 	const checkAge = $derived(check ? now - check.at : Infinity);
 	const checkFresh = $derived(checkAge < FRESH_MS);
+	const nonceMoved = $derived(!!check && !!w && check.nextNonce !== w.nextNonce);
 	const checkOk = $derived(
-		!!check && checkFresh && check.verdict === 'clean' && !!listing && check.priceYocto === listing.priceYocto
+		!!check &&
+			checkFresh &&
+			check.verdict === 'clean' &&
+			!!listing &&
+			check.priceYocto === listing.priceYocto &&
+			!nonceMoved
 	);
 	const canBuy = $derived(!!account && !isOwner && !!listing && checkOk && !acting);
 
 	async function recheck() {
 		checking = true;
 		checkError = null;
+		walletChanged = false;
 		const st = await status.load();
 		if (st) {
 			check = {
 				verdict: st.verdict,
 				at: Date.now(),
 				pending: st.pending.length,
-				priceYocto: st.wallet.listing?.priceYocto ?? null
+				priceYocto: st.wallet.listing?.priceYocto ?? null,
+				nextNonce: st.wallet.nextNonce
 			};
 		} else {
 			checkError = status.error ?? new Error('Wallet not found');
@@ -249,17 +313,25 @@
 	}
 
 	async function doBuy() {
-		if (!w || !listing || !canBuy) return;
+		if (!w || !listing || !canBuy || !check) return;
 		acting = true;
+		walletChanged = false;
 		try {
-			await buyToken(w.tokenId, listing.priceYocto);
+			// Bound to the nonce the buyer just verified: the contract refuses if the wallet has signed since.
+			await buyToken(w.tokenId, listing.priceYocto, check.nextNonce);
 			bought = true;
 			check = null;
 			toast({ tone: 'success', title: `You own wallet #${w.tokenId}`, message: 'Payment and NFT transfer settled in one call.' });
 			await status.load();
 		} catch (x) {
 			const d = describeError(x, { contractCall: true });
-			toast({ tone: 'error', title: d.kind === 'refused' ? 'The contract refused the purchase' : 'Purchase failed', message: d.detail });
+			if (isWalletChangedError(d.raw) || isWalletChangedError(d.detail)) {
+				walletChanged = true;
+				check = null;
+				status.load();
+			} else {
+				toast({ tone: 'error', title: d.kind === 'refused' ? 'The contract refused the purchase' : 'Purchase failed', message: d.detail });
+			}
 		} finally {
 			acting = false;
 		}
@@ -416,7 +488,12 @@
 								<p class="v-label">
 									{meta.label}{#if s.verdict === 'dirty'}<span class="v-count">&nbsp;·&nbsp;{s.pending.length} pending</span>{/if}
 								</p>
-								{#if s.verdict === 'busy' && !s.wallet.inFlight && reserved}
+								{#if s.verdict === 'busy' && s.wallet.transferCallPending}
+									<p class="v-head">A transfer call is in progress</p>
+									<p class="v-exp">
+										The NFT is in the middle of a transfer call; its owner may change. Check again once it has resolved.
+									</p>
+								{:else if s.verdict === 'busy' && !s.wallet.inFlight && reserved}
 									<p class="v-head">A signing attempt did not complete</p>
 									<p class="v-exp">
 										The contract reserved nonce {reserved.nonce} for a transfer whose signature may already exist. Until the owner
@@ -588,9 +665,29 @@
 								</div>
 							</header>
 							<div class="p-body stack">
-								{#if w.inFlight}
+								{#if transferPending}
+									<Callout tone="busy" title="A transfer call is in progress">
+										The NFT is in the middle of a transfer call; its owner may change. Signing and listing resume once it
+										resolves.
+									</Callout>
+								{:else if w.inFlight}
 									<Callout tone="busy" title="A signature is in flight">
 										The contract accepts one request at a time. Wait for it to finish, then re-check.
+										{#snippet actions()}
+											{#if canRelease}
+												<p class="small muted release-note">
+													The signing network timed out on this request. Releasing keeps the same transaction reserved, so it
+													can be retried.
+												</p>
+												<Button size="sm" variant="secondary" icon="unlock" loading={releasing} onclick={doRelease}>
+													Release stuck request
+												</Button>
+											{:else if releaseWait !== null && releaseWait > 0}
+												<span class="small muted">
+													If it never finishes, you can release it in about {releaseWait} NEAR {releaseWait === 1 ? 'block' : 'blocks'}.
+												</span>
+											{/if}
+										{/snippet}
 									</Callout>
 								{:else if reserved}
 									<Callout tone="busy" title="Signing attempt for nonce {reserved.nonce} did not complete">
@@ -698,11 +795,19 @@
 										<span class="bs-n">2</span>
 										<div class="bs-body">
 											<p class="bs-t">Pay and receive in one call</p>
-											<p class="bs-d">If the NFT does not move, you are not charged.</p>
+											<p class="bs-d">
+												You pay exactly the listed price, bound to the wallet state you just checked. If the NFT does not move, you are not charged.
+											</p>
 										</div>
 									</li>
 								</ol>
 
+								{#if walletChanged || (check && checkFresh && nonceMoved)}
+									<Callout tone="dirty" title="The wallet changed since your check" role="alert">
+										The wallet signed a new transaction after your check, so nothing was bought and you were not charged.
+										Run the clean check again before you buy.
+									</Callout>
+								{/if}
 								{#if checkError}
 									<ErrorState error={checkError} compact title="Check failed" />
 								{:else if check && checkFresh && check.verdict !== 'clean'}

@@ -1,6 +1,7 @@
 import { ethAddressFromMpcKey } from './address';
 import { bytesToBase64 } from './bytes';
 import { cleanCheck } from './check';
+import { signerRecoveryProblems } from './signers';
 import { fromSignedTxView, fromWalletView } from './convert';
 import type {
   CleanCheckResult,
@@ -194,6 +195,18 @@ export async function runCleanCheck(params: RunCleanCheckParams): Promise<CleanC
   const result = cleanCheck(fromWalletView(wallet), sigLog, {
     confirmedNonce,
     pendingNonce,
+    derivedAddress: address,
   });
+  const signerProblems = signerRecoveryProblems(address, sigLog);
+  if (signerProblems.length > 0) {
+    return {
+      ...result,
+      verdict: 'inconsistent',
+      reasons: [...signerProblems, ...result.reasons],
+      wallet,
+      sigLog,
+      balanceWei,
+    };
+  }
   return { ...result, wallet, sigLog, balanceWei };
 }

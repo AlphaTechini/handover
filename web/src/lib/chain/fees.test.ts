@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FALLBACK_FEES, isAlreadyKnownError, withHeadroom } from './fees';
+import { clampFees, FALLBACK_FEES, FIXED_GAS_LIMIT, MIN_MAX_FEE_PER_GAS, isAlreadyKnownError, withHeadroom } from './fees';
 
 describe('fees', () => {
 	it('adds 20% headroom to maxFee only', () => {
@@ -16,4 +16,13 @@ describe('fees', () => {
 		expect(isAlreadyKnownError('nonce too low: next nonce 3')).toBe(true);
 		expect(isAlreadyKnownError('insufficient funds')).toBe(false);
 	});
+	it('clamps maxFee up to 1 gwei and priority to at most maxFee', () => {
+		expect(clampFees({ maxFeePerGas: 5n, maxPriorityFeePerGas: 4n })).toEqual({ maxFeePerGas: MIN_MAX_FEE_PER_GAS, maxPriorityFeePerGas: 4n });
+		expect(clampFees({ maxFeePerGas: 2_000_000_000n, maxPriorityFeePerGas: 3_000_000_000n })).toEqual({ maxFeePerGas: 2_000_000_000n, maxPriorityFeePerGas: 2_000_000_000n });
+	});
+	it('never produces a zero priority fee and leaves valid fees alone', () => {
+		expect(clampFees({ maxFeePerGas: 9_000_000_000n, maxPriorityFeePerGas: 0n }).maxPriorityFeePerGas).toBe(1n);
+		expect(clampFees(FALLBACK_FEES)).toEqual(FALLBACK_FEES);
+	});
+	it('gas limit is fixed at 21000', () => expect(FIXED_GAS_LIMIT).toBe(21000n));
 });

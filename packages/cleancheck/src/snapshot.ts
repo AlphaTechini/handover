@@ -2,6 +2,7 @@ import { keccak256Hex } from './address';
 import { hexToBytes, isHex } from './bytes';
 import { cleanCheck } from './check';
 import { fromSignedTxView, fromWalletView } from './convert';
+import { signerRecoveryProblems } from './signers';
 import { decodeSignedTx, SEPOLIA_CHAIN_ID, type DecodedSignedTx } from './tx';
 import { ethBalance, ethNonce, fetchSigLog, fetchWallet } from './rpc';
 import type { CleanCheckResult, Hex, SignedTxView, Verdict, WalletView } from './types';
@@ -77,15 +78,19 @@ const VERDICTS: Verdict[] = ['clean', 'dirty', 'busy', 'inconsistent'];
  * nonce, chain id (Sepolia), to, value, gas limit and fees as the log entry.
  * Any mismatch makes the verdict "inconsistent".
  *
- * Signatures are not recovered here; this does not prove who signed.
+ * Every signature is also recovered and must come from `s.address`.
  */
 export function verifySnapshot(s: Snapshot): CleanCheckResult {
   assertSnapshot(s);
   const base = cleanCheck(fromWalletView(s.wallet), s.sigLog.map(fromSignedTxView), {
     confirmedNonce: s.chain.confirmedNonce,
     pendingNonce: s.chain.pendingNonce,
+    derivedAddress: s.address,
   });
-  const integrity = s.sigLog.flatMap(txIntegrityProblems);
+  const integrity = [
+    ...s.sigLog.flatMap(txIntegrityProblems),
+    ...signerRecoveryProblems(s.address, s.sigLog.map(fromSignedTxView)),
+  ];
   if (integrity.length === 0) return base;
   return { ...base, verdict: 'inconsistent', reasons: [...integrity, ...base.reasons] };
 }

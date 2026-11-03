@@ -11,8 +11,11 @@ import type {
  *
  * Evaluation order (see SPEC.md "Clean check semantics"):
  *  1. The signature log must hold exactly nonces 0..nextNonce-1, once each.
- *  2. The chain must not be ahead of the contract (confirmed, and pending if given).
+ *  2. The chain must not be ahead of the contract (confirmed, and pending if given), and the
+ *     contract's recorded signer address (`wallet.ethAddress`) must equal `chain.derivedAddress`
+ *     when both are present.
  *  3. A signature request in flight is "busy".
+ *  3a. An unresolved transfer call is "busy".
  *  3b. A reserved (uncompleted) signing attempt is also "busy".
  *  4. confirmed < nextNonce is "dirty"; pending = log entries with nonce >= confirmed.
  *  5. Otherwise "clean".
@@ -69,6 +72,15 @@ export function cleanCheck(
       `Reserved transaction has nonce ${wallet.reserved.nonce} but the contract's next nonce is ${issued}.`,
     );
   }
+  if (
+    wallet.ethAddress != null &&
+    chain.derivedAddress !== undefined &&
+    wallet.ethAddress.toLowerCase() !== chain.derivedAddress.toLowerCase()
+  ) {
+    chainProblems.push(
+      `The contract recorded ${wallet.ethAddress.toLowerCase()} as this wallet's signer, but the MPC-derived address is ${chain.derivedAddress.toLowerCase()}.`,
+    );
+  }
   if (chainProblems.length > 0) return done('inconsistent', chainProblems);
 
   const summary = issuedSummary(issued, confirmed);
@@ -78,6 +90,14 @@ export function cleanCheck(
     return done('busy', [
       summary,
       'A signature request is in flight; a new signed transaction may appear.',
+    ]);
+  }
+
+  // 3a. An unresolved nft_transfer_call can still change the owner.
+  if (wallet.transferCallPending === true) {
+    return done('busy', [
+      summary,
+      'The NFT is in the middle of a transfer call; its owner may change.',
     ]);
   }
 
@@ -174,6 +194,7 @@ function validateInputs(wallet: WalletInput, sigLog: SignedTxRecord[], chain: Ch
   assertNonNegInt(wallet.nextNonce, 'wallet.nextNonce');
   assertBool(wallet.inFlight, 'wallet.inFlight');
   assertBool(wallet.listed, 'wallet.listed');
+  if (wallet.transferCallPending !== undefined) assertBool(wallet.transferCallPending, 'wallet.transferCallPending');
   if (wallet.reserved != null) assertNonNegInt(wallet.reserved.nonce, 'wallet.reserved.nonce');
 
   if (!Array.isArray(sigLog)) throw new TypeError('sigLog must be an array');

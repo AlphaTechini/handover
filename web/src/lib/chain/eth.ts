@@ -1,7 +1,7 @@
 import { createPublicClient, http, keccak256, type PublicClient } from 'viem';
 import { sepolia } from 'viem/chains';
 import { ETH_EXPLORER, NEAR_EXPLORER, SEPOLIA_RPC } from './config';
-import { FALLBACK_FEES, isAlreadyKnownError, withHeadroom } from './fees';
+import { clampFees, FALLBACK_FEES, isAlreadyKnownError, withHeadroom } from './fees';
 import type { EthFees, Hex } from './types';
 
 let client: PublicClient | null = null;
@@ -21,12 +21,12 @@ export async function getNonces(address: Hex): Promise<{ latest: number; pending
 	return { latest, pending };
 }
 
-/** EIP-1559 fees with 20% headroom on maxFee; falls back to 30 / 1.5 gwei if estimation fails. */
+/** EIP-1559 fees with 20% headroom on maxFee; clamped to the contract's 1 gwei floor; falls back to 30 / 1.5 gwei if estimation fails. */
 export async function getFees(): Promise<EthFees> {
 	try {
 		const est = await pc().estimateFeesPerGas();
 		if (est.maxFeePerGas == null || est.maxPriorityFeePerGas == null) return FALLBACK_FEES;
-		return withHeadroom({ maxFeePerGas: est.maxFeePerGas, maxPriorityFeePerGas: est.maxPriorityFeePerGas });
+		return clampFees(withHeadroom({ maxFeePerGas: est.maxFeePerGas, maxPriorityFeePerGas: est.maxPriorityFeePerGas }));
 	} catch {
 		return FALLBACK_FEES;
 	}

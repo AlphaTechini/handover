@@ -270,3 +270,37 @@ describe('cleanCheck: input validation', () => {
     });
   }
 });
+
+describe('cleanCheck: transfer call and recorded signer', () => {
+  it('transfer_call_pending is busy', () => {
+    const r = cleanCheck(wallet(2, { transferCallPending: true }), logOf(0, 2), { confirmedNonce: 2 });
+    expect(r.verdict).toBe('busy');
+    expect(r.reasons).toContain('The NFT is in the middle of a transfer call; its owner may change.');
+  });
+
+  it('a recorded ethAddress that differs from the derived address is inconsistent (case-insensitive compare)', () => {
+    const recorded = `0x${'ab'.repeat(20)}` as Hex;
+    const same = cleanCheck(wallet(1, { ethAddress: recorded }), logOf(0, 1), {
+      confirmedNonce: 1,
+      derivedAddress: recorded.toUpperCase().replace('0X', '0x') as Hex,
+    });
+    expect(same.verdict).toBe('clean');
+    const diff = cleanCheck(wallet(1, { ethAddress: recorded }), logOf(0, 1), {
+      confirmedNonce: 1,
+      derivedAddress: `0x${'cd'.repeat(20)}`,
+    });
+    expect(diff.verdict).toBe('inconsistent');
+  });
+
+  it('ethAddress is ignored when no derived address is provided, or when null', () => {
+    expect(
+      cleanCheck(wallet(1, { ethAddress: `0x${'ab'.repeat(20)}` }), logOf(0, 1), { confirmedNonce: 1 }).verdict,
+    ).toBe('clean');
+    expect(
+      cleanCheck(wallet(1, { ethAddress: null }), logOf(0, 1), {
+        confirmedNonce: 1,
+        derivedAddress: `0x${'cd'.repeat(20)}`,
+      }).verdict,
+    ).toBe('clean');
+  });
+});

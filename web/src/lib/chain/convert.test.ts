@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { classifySigning, toConfig, toSignedTx, toWalletState } from './convert';
+import { blocksUntilRelease, canReleaseStuck, classifySigning, signDepositYocto, toConfig, toSignedTx, toWalletState } from './convert';
 
 const reserved = {
 	nonce: 3, to: '0x' + '22'.repeat(20), value_wei: '5', gas_limit: '21000', max_fee_per_gas: '9',
-	max_priority_fee_per_gas: '1', payload_hash_hex: '0xab', requested_at_ns: '77', attempts: 2
+	max_priority_fee_per_gas: '1', payload_hash_hex: '0xab', requested_at_ns: '77', attempts: 2, requested_at_block: 1000
 };
 const wallet = {
 	token_id: '4', owner_id: 'a.testnet', path: 'handover-4', next_nonce: 3, in_flight: false,
 	listing: { token_id: '4', seller_id: 'a.testnet', price: '10', listed_at_ns: '9' },
-	sig_count: 3, minted_at_ns: '1', reserved
+	sig_count: 3, minted_at_ns: '1', reserved, transfer_call_pending: true, eth_address: '0x' + 'ab'.repeat(20)
 };
 
 describe('converters', () => {
@@ -19,6 +19,15 @@ describe('converters', () => {
 		expect(w.inFlight).toBe(false);
 		expect(w.listing).toEqual({ tokenId: '4', sellerId: 'a.testnet', priceYocto: '10', listedAtNs: '9' });
 		expect(w.reserved).toMatchObject({ nonce: 3, valueWei: '5', payloadHashHex: '0xab', requestedAtNs: '77', attempts: 2 });
+	});
+	it('maps new security fields and defaults them for old views', () => {
+		const w = toWalletState(wallet);
+		expect(w.transferCallPending).toBe(true);
+		expect(w.ethAddress).toBe('0x' + 'ab'.repeat(20));
+		expect(w.reserved?.requestedAtBlock).toBe(1000);
+		const old = toWalletState({ ...wallet, transfer_call_pending: undefined, eth_address: undefined });
+		expect(old.transferCallPending).toBe(false);
+		expect(old.ethAddress).toBeNull();
 	});
 	it('missing reserved/listing become null', () => {
 		const w = toWalletState({ ...wallet, listing: null, reserved: undefined });
@@ -35,7 +44,8 @@ describe('converters', () => {
 	});
 	it('maps config with fee defaults', () => {
 		expect(toConfig({ mpc_contract_id: 'm', chain_id: 11155111, path_prefix: 'handover-', sign_fee: '1', mint_fee: '2' }))
-			.toEqual({ mpcContractId: 'm', chainId: 11155111, pathPrefix: 'handover-', signFeeYocto: '1', mintFeeYocto: '2' });
+			.toEqual({ mpcContractId: 'm', chainId: 11155111, pathPrefix: 'handover-', signFeeYocto: '1', mintFeeYocto: '2', releaseAfterBlocks: 300 });
+		expect(toConfig({ mpc_contract_id: 'm', chain_id: 1, path_prefix: 'p', release_after_blocks: 500 }).releaseAfterBlocks).toBe(500);
 		expect(toConfig({ mpc_contract_id: 'm', chain_id: 1, path_prefix: 'p' }).signFeeYocto).toBe('10000000000000000000000');
 	});
 });
@@ -45,4 +55,24 @@ describe('classifySigning', () => {
 	it('failed when reserved and idle', () => expect(classifySigning(3, { next_nonce: 3, in_flight: false, reserved })).toBe('failed'));
 	it('waiting while in flight', () => expect(classifySigning(3, { next_nonce: 3, in_flight: true, reserved })).toBe('waiting'));
 	it('waiting when nothing landed yet', () => expect(classifySigning(3, { next_nonce: 3, in_flight: false, reserved: null })).toBe('waiting'));
+});
+
+describe('sign deposit and release window', () => {
+	it('deposit is sign_fee + 1 yocto', () => {
+		expect(signDepositYocto('10000000000000000000000')).toBe('10000000000000000000001');
+	});
+	const cfg = { releaseAfterBlocks: 300 };
+	const inflight = (b: number) => ({ inFlight: true, reserved: { requestedAtBlock: b } as any });
+	it('release is allowed only strictly after requested_at_block + window', () => {
+		expect(canReleaseStuck(inflight(1000), cfg, 1300)).toBe(false);
+		expect(canReleaseStuck(inflight(1000), cfg, 1301)).toBe(true);
+	});
+	it('release is not allowed when idle or without a reservation', () => {
+		expect(canReleaseStuck({ inFlight: false, reserved: inflight(1).reserved }, cfg, 9999)).toBe(false);
+		expect(canReleaseStuck({ inFlight: true, reserved: null }, cfg, 9999)).toBe(false);
+	});
+	it('counts blocks remaining', () => {
+		expect(blocksUntilRelease(inflight(1000), cfg, 1100)).toBe(201);
+		expect(blocksUntilRelease(inflight(1000), cfg, 1301)).toBe(0);
+	});
 });

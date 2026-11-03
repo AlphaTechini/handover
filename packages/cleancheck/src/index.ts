@@ -26,6 +26,7 @@ export {
   type CaptureSnapshotParams,
   type Snapshot,
 } from './snapshot';
-export { decodeSignedTx, rlpDecode, SEPOLIA_CHAIN_ID, type DecodedSignedTx } from './tx';
+export { signerRecoveryProblems } from './signers';
+export { decodeSignedTx, recoverSigner, rlpDecode, SEPOLIA_CHAIN_ID, type DecodedSignedTx } from './tx';
 export { formatEth, formatReport, type ReportInput, type ReportOptions } from './report';
 export { bytesToHex, hexToBytes, isHex } from './bytes';

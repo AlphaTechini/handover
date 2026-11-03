@@ -51,6 +51,8 @@ export interface TxFields {
   /** Signature components. Not verified by the package; any bytes are accepted. */
   r: Uint8Array;
   s: Uint8Array;
+  /** 0 or 1. Defaults to 0. */
+  yParity?: 0 | 1;
 }
 
 /** Builds a signed EIP-1559 raw transaction (0x02 || rlp([...12 fields])) as 0x-hex. */
@@ -65,11 +67,17 @@ export function buildRawTx(f: TxFields): Hex {
     scalarBytes(f.value),
     new Uint8Array(), // data: plain transfer
     [], // access list
-    new Uint8Array(), // yParity 0
-    f.r,
-    f.s,
+    f.yParity === 1 ? Uint8Array.of(1) : new Uint8Array(),
+    stripZeros(f.r),
+    stripZeros(f.s),
   ]);
   return `0x02${bytesToHex(payload)}` as Hex;
+}
+
+function stripZeros(b: Uint8Array): Uint8Array {
+  let i = 0;
+  while (i < b.length && b[i] === 0) i++;
+  return b.subarray(i);
 }
 
 export function txHashOf(raw: Hex): Hex {

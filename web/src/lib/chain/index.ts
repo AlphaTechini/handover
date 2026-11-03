@@ -8,3 +8,5 @@ export * from './eth';
 export * from './address';
 export * from './status';
 export * from './format';
+export { clampFees, FIXED_GAS_LIMIT, MIN_MAX_FEE_PER_GAS } from './fees';
+export { isWalletChangedError } from './errors';

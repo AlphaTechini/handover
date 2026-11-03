@@ -2,7 +2,10 @@ import { nearView, type ListingView, type SignedTxView, type WalletView } from '
 import { callContract, nearWallet } from './wallet.svelte';
 import { HANDOVER_CONTRACT, MARKET_GAS, MINT_GAS, NEAR_RPC, SIGN_GAS } from './config';
 import {
+	blocksUntilRelease,
+	canReleaseStuck,
 	classifySigning,
+	signDepositYocto,
 	toConfig,
 	toListing,
 	toSignedTx,
@@ -10,6 +13,7 @@ import {
 	type ConfigView
 } from './convert';
 import { getFees } from './eth';
+import { clampFees, FIXED_GAS_LIMIT } from './fees';
 import type { ContractConfig, Listing, SignedTx, WalletState } from './types';
 
 function view<T>(method: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -88,7 +92,10 @@ export async function mint(): Promise<string> {
 	throw new Error('Mint was sent but the new token id could not be read; check My wallets');
 }
 
-export interface TransferRequest { tokenId: string; to: `0x${string}`; valueWei: bigint; gasLimit?: bigint; maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; }
+export { blocksUntilRelease, canReleaseStuck };
+
+/** Gas limit is fixed by the contract (plain transfer only), so there is no override. */
+export interface TransferRequest { tokenId: string; to: `0x${string}`; valueWei: bigint; maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; }
 
 const POLL_INTERVAL_MS = 3_000;
 const POLL_TIMEOUT_MS = 90_000;
@@ -123,7 +130,7 @@ async function awaitSignature(tokenId: string, nonce: number): Promise<SignedTx>
 
 async function signCall(tokenId: string, method: string, args: Record<string, unknown>, nonce: number): Promise<SignedTx> {
 	const cfg = await getConfig();
-	const { value } = await callContract<SignedTxView | null>(method, args, { gas: SIGN_GAS, deposit: cfg.signFeeYocto });
+	const { value } = await callContract<SignedTxView | null>(method, args, { gas: SIGN_GAS, deposit: signDepositYocto(cfg.signFeeYocto) });
 	if (value && value.nonce === nonce) return toSignedTx(value);
 	return awaitSignature(tokenId, nonce);
 }
@@ -136,6 +143,8 @@ export async function requestTransfer(req: TransferRequest): Promise<SignedTx> {
 		maxFeePerGas ??= fees.maxFeePerGas;
 		maxPriorityFeePerGas ??= fees.maxPriorityFeePerGas;
 	}
+	// The contract rejects max fee below 1 gwei or priority above max fee.
+	({ maxFeePerGas, maxPriorityFeePerGas } = clampFees({ maxFeePerGas, maxPriorityFeePerGas }));
 	const before = await getWallet(req.tokenId);
 	if (!before) throw new Error(`Wallet ${req.tokenId} does not exist`);
 	return signCall(
@@ -145,7 +154,7 @@ export async function requestTransfer(req: TransferRequest): Promise<SignedTx> {
 			token_id: req.tokenId,
 			to: req.to.toLowerCase(),
 			value_wei: req.valueWei.toString(),
-			gas_limit: (req.gasLimit ?? 21000n).toString(),
+			gas_limit: FIXED_GAS_LIMIT.toString(),
 			max_fee_per_gas: maxFeePerGas.toString(),
 			max_priority_fee_per_gas: maxPriorityFeePerGas.toString()
 		},
@@ -169,7 +178,33 @@ export async function delistToken(tokenId: string): Promise<void> {
 	await callContract('delist', { token_id: tokenId }, { gas: MARKET_GAS, deposit: '1' });
 }
 
-export async function buyToken(tokenId: string, priceYocto: string): Promise<void> {
-	await callContract('buy', { token_id: tokenId }, { gas: MARKET_GAS, deposit: priceYocto });
+/**
+ * Buys a listed wallet. The deposit equals the price exactly. `expectedNextNonce` is the issued-signature
+ * count the buyer's clean check saw; the contract rejects the buy if the wallet has signed since.
+ */
+export async function buyToken(tokenId: string, priceYocto: string, expectedNextNonce: number): Promise<void> {
+	await callContract(
+		'buy',
+		{ token_id: tokenId, expected_next_nonce: expectedNextNonce },
+		{ gas: MARKET_GAS, deposit: priceYocto }
+	);
 }
 
+/** Frees a signing request that the MPC never answered. The reservation is kept so it can be retried. */
+export async function releaseStuck(tokenId: string): Promise<void> {
+	await callContract('release_stuck', { token_id: tokenId }, { gas: MARKET_GAS, deposit: '1' });
+}
+
+/** Current NEAR block height (final), used to decide whether release_stuck is available. */
+export async function currentBlockHeight(): Promise<number> {
+	const res = await fetch(NEAR_RPC, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ jsonrpc: '2.0', id: 'handover', method: 'block', params: { finality: 'final' } })
+	});
+	if (!res.ok) throw new Error(`HTTP ${res.status} from NEAR RPC`);
+	const json = await res.json();
+	const height = json?.result?.header?.height;
+	if (typeof height !== 'number') throw new Error('NEAR RPC block response has no height');
+	return height;
+}

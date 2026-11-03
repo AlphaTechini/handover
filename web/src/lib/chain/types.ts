@@ -22,6 +22,8 @@ export interface ReservedTx {
 	payloadHashHex: string;
 	requestedAtNs: string;
 	attempts: number;
+	/** NEAR block height of the signing request; release_stuck is allowed after requestedAtBlock + releaseAfterBlocks */
+	requestedAtBlock: number;
 }
 
 export interface WalletState {
@@ -38,6 +40,10 @@ export interface WalletState {
 	mintedAtNs: string;
 	/** Set when a signing attempt did not complete; the owner must call retryReserved */
 	reserved: ReservedTx | null;
+	/** True while an nft_transfer_call is unresolved (the owner may change) */
+	transferCallPending: boolean;
+	/** Signer address the contract recorded at the first signature (trust on first use), or null */
+	ethAddress: Hex | null;
 }
 
 export interface SignedTx {
@@ -60,6 +66,8 @@ export interface ContractConfig {
 	signFeeYocto: string;
 	/** Minimum deposit for nft_mint, yoctoNEAR */
 	mintFeeYocto: string;
+	/** NEAR blocks after a sign request before the owner may call release_stuck */
+	releaseAfterBlocks: number;
 }
 
 export interface EthFees {
