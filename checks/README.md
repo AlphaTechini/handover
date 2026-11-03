@@ -117,11 +117,11 @@ off-chain and have the contract verify its fields before signing, and record the
    ```bash
    near contract call-function as-transaction $HANDOVER_CONTRACT request_transfer \
      json-args '{"token_id":"0","to":"0x000000000000000000000000000000000000dEaD","value_wei":"100000000000000","gas_limit":"21000","max_fee_per_gas":"30000000000","max_priority_fee_per_gas":"1000000000"}' \
-     prepaid-gas '300 Tgas' attached-deposit '0.01 NEAR' \
+     prepaid-gas '300 Tgas' attached-deposit '10000000000000000000001 yoctoNEAR' \
      sign-as $NEAR_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
    ```
 
-   The 0.01 NEAR deposit is the sign fee (SPEC D3). The contract refunds any excess.
+   The deposit is the 0.01 NEAR sign fee plus 1 yocto. The contract keeps the fee and forwards the rest (1 yocto) to the MPC contract; nothing is refunded, so do not attach more.
 2. Fund the derived address printed by the script with Sepolia ETH (check 1's faucet link).
 3. `pnpm --filter checks check:5`
 

@@ -45,11 +45,11 @@ NFT Chain Keys ([`near/multichain-gas-station-contract`, directory `nft_key`](ht
 Each Handover NFT has its own Ethereum address, derived by NEAR Chain Signatures from the Handover contract's account and the path `handover-<token_id>`. Only the Handover contract can ask the MPC signer for signatures on that address.
 
 1. **Mint.** `nft_mint` creates token `0`, `1`, `2`, ... for the caller. The UI and CLI derive the token's Ethereum address from the MPC contract's `derived_public_key` view.
-2. **Spend (owner only).** `request_transfer(token_id, to, value_wei, gas_limit, max_fee_per_gas, max_priority_fee_per_gas)` checks the caller owns the token and that the token is not listed and not already signing. The contract builds an EIP-1559 transaction itself with the next nonce, `chain_id` fixed at init, and empty calldata, hashes it, and asks the MPC contract to sign. There is no parameter for calldata, so the contract can only ever sign "send ETH to an address".
-3. **Log.** On success, `on_signed` rebuilds the transaction from its own reserved copy, checks the returned signature, appends the signed transaction to a public log (`get_sig_log`) and increments the nonce. Anyone can broadcast anything in the log.
+2. **Spend (owner only).** `request_transfer(token_id, to, value_wei, gas_limit, max_fee_per_gas, max_priority_fee_per_gas)` checks the caller owns the token and that the token is not listed, not already signing and not in a pending transfer call. The contract builds an EIP-1559 transaction itself with the next nonce, `chain_id` fixed at init, and empty calldata, hashes it, and asks the MPC contract to sign. There is no parameter for calldata, so the contract can only ever sign "send ETH to an address". The parameters are restricted: `gas_limit` must be exactly 21000, `max_fee_per_gas` at least 1 gwei, `max_priority_fee_per_gas` above 0 and not above `max_fee_per_gas`, `to` not the zero address, `value_wei` above 0. The deposit must be at least the sign fee plus 1 yocto (0.01 NEAR + 1 yocto); the contract keeps the 0.01 NEAR sign fee and forwards the rest to the MPC contract. Nothing is refunded.
+3. **Log.** On success, `on_signed` rebuilds the transaction from its own reserved copy, checks the returned signature, appends the signed transaction to a public log (`get_sig_log`) and increments the nonce. Anyone can broadcast anything in the log. `on_signed` reads the raw MPC response itself, so a response of an unexpected shape is recorded as a failed attempt and never aborts the callback. The first accepted signature pins the wallet's Ethereum address (`eth_address` in `get_wallet`); a later signature that recovers to a different address is treated as a failed attempt.
 4. **List.** `list(token_id, price)` freezes signing. Nothing new can be signed until `delist` or a sale.
-5. **Clean check (off-chain, anyone can run it).** Read `next_nonce`, the signature log and the wallet flags from the contract, and the address's confirmed nonce from Sepolia. If the Sepolia nonce equals `next_nonce`, every signature ever issued has been used, so none can be broadcast later.
-6. **Buy.** `buy(token_id)` with at least the price attached moves the NFT to the buyer, pays the seller exactly the price, refunds any excess, and clears the listing, in one call. The old owner is refused from then on.
+5. **Clean check (off-chain, anyone can run it).** Read `next_nonce`, the signature log and the wallet flags from the contract, and the address's confirmed nonce from Sepolia. If the Sepolia nonce equals `next_nonce`, every signature ever issued has been used, so none can be broadcast later. The check also recovers the signer of every logged transaction and compares it with the address derived from the MPC public key; the contract's pinned `eth_address`, when set, must match that derived address too. Any mismatch is `inconsistent`.
+6. **Buy.** `buy(token_id, expected_next_nonce)` with exactly the price attached moves the NFT to the buyer, pays the seller exactly the price, and clears the listing, in one call. Less or more than the price is rejected, so there is no refund path. The call is bound to the state the buyer checked: `expected_next_nonce` is the `next_nonce` the buyer's clean check saw, and the call fails with "Wallet changed since you checked it" if the wallet signed anything since. A seller who delists, signs and relists is therefore caught. The old owner is refused from then on.
 
 **Invariant:** *Once a Handover wallet shows clean, no one but the next owner can ever move its funds.*
 
@@ -59,8 +59,8 @@ Each Handover NFT has its own Ethereum address, derived by NEAR Chain Signatures
 |---|---|
 | `clean` | Log is complete, nothing in flight or reserved, Sepolia nonce equals `next_nonce`. Safe to buy. |
 | `dirty` | Some logged signed transactions are not mined yet. The UI lists them; they are the seller's own transfers and anyone can broadcast them, after which the verdict becomes `clean`. |
-| `busy` | A signing request is in flight, or a signing attempt did not complete and a transaction is reserved (below). A signature may still appear. |
-| `inconsistent` | The data contradicts itself (a gap or duplicate in the log, a Sepolia nonce ahead of the contract, a logged transaction that does not match its raw bytes). Treat as unsafe. |
+| `busy` | A signing request is in flight, a signing attempt did not complete and a transaction is reserved (below), or an `nft_transfer_call` is unresolved (the owner may still change). A signature may still appear. |
+| `inconsistent` | The data contradicts itself (a gap or duplicate in the log, a Sepolia nonce ahead of the contract, a logged transaction that does not match its raw bytes, a logged transaction signed by a key other than the wallet's, a recorded `eth_address` that differs from the derived one). Treat as unsafe. |
 
 ### What if a signature leaked from a failed MPC call?
 
@@ -68,8 +68,13 @@ The MPC network publishes a signature on chain when it responds, even if Handove
 
 - `request_transfer` stores the exact transaction (nonce, recipient, amount, fees, payload hash) as *reserved* and marks the token in flight **before** calling MPC.
 - If the callback sees a failure or timeout, the nonce is **not** consumed and the reservation **stays**. While it stays, a new `request_transfer` is rejected whatever its arguments, and `list`, `buy`, `nft_transfer` and `nft_transfer_call` are rejected too. The owner must call `retry_reserved`, which asks for a signature on the identical transaction.
+- If the callback never runs at all (for example it runs out of gas), `in_flight` stays set. After 300 blocks the owner can call `release_stuck` (exactly 1 yocto, only while in flight). It clears `in_flight` and keeps the reservation, which is the state of a failed attempt, so no signature can be forgotten. The MPC contract's own yield timeout is 200 blocks, so the 300-block wait lets a late MPC response arrive first. `retry_reserved` follows.
 - Any signature that leaked therefore authorises the very transaction the contract already knows about. Whichever copy is broadcast, the effect is the same and only one can be mined.
 - The clean check reports a reserved transaction as `busy`, so no buyer is told "clean" while one exists.
+
+### Transfer calls
+
+`nft_transfer_call` makes the receiver the owner while the token may still be returned. The contract sets `transfer_call_pending` on the wallet for that window. While it is set, `request_transfer`, `retry_reserved`, `list`, `buy`, `nft_transfer` and `nft_transfer_call` are rejected, and the clean check reports `busy`. The overridden `nft_resolve_transfer` clears the flag on every path (kept, returned, or receiver call failed).
 
 ## 5. NEAR features used
 
@@ -77,8 +82,8 @@ The MPC network publishes a signature on chain when it responds, even if Handove
 |---|---|---|
 | **Chain Signatures** (MPC signer `v1.signer-prod.testnet`, `sign` with `payload_v2` and `domain_id` 0) | [`mpc.rs`](contracts/handover/src/mpc.rs), [`wallet.rs`](contracts/handover/src/wallet.rs) (`sign_promise`) | A contract cannot control an Ethereum address. The wallet would need a private key, which brings back the exact problem Handover solves. |
 | **NEP-171 / 177 / 178 / 181** via `near-contract-standards` 5.30.0 | [`lib.rs`](contracts/handover/src/lib.rs) | The wallet would not be a transferable token that wallets, explorers and marketplaces understand. |
-| **Cross-contract call and callback** (`.then`, `#[callback_result]`, `#[private]`) | [`wallet.rs`](contracts/handover/src/wallet.rs) (`request_transfer`, `on_signed`) | Signing is asynchronous. Without the callback the contract cannot log the signature, or release the reservation. |
-| **1-yocto confirmation** (`assert_one_yocto`) | [`market.rs`](contracts/handover/src/market.rs) (`list`, `delist`) | A function-call access key could list or delist; the deposit forces a full-access key. |
+| **Cross-contract call and callback** (`.then`, `#[private]`, raw promise result read in the callback) | [`wallet.rs`](contracts/handover/src/wallet.rs) (`request_transfer`, `on_signed`, `read_signature_result`) | Signing is asynchronous. Without the callback the contract cannot log the signature, or release the reservation. |
+| **1-yocto confirmation** (`assert_one_yocto`) | [`market.rs`](contracts/handover/src/market.rs) (`list`, `delist`), [`wallet.rs`](contracts/handover/src/wallet.rs) (`release_stuck`) | A function-call access key could list or delist; the deposit forces a full-access key. |
 | **Attached deposits and promise transfers** | [`market.rs`](contracts/handover/src/market.rs) (`buy`), [`wallet.rs`](contracts/handover/src/wallet.rs) | Payment and NFT transfer could not happen in one atomic call. |
 | **Locked contract** (full-access keys deleted after the final deploy) | [`README` section 14](#14-setup-env-deploy-security-roadmap), proof planned in `evidence/access-keys.txt` | The contract owner could upgrade the code and take every wallet. The contract has no admin or upgrade method, so deleting its keys makes the code final. |
 | **NEP-297 events** | [`events.rs`](contracts/handover/src/events.rs) | Indexers would have no record of signatures, listings and sales. |
@@ -90,23 +95,37 @@ Full table with one row per security requirement: [`docs/CLAIMS.md`](docs/CLAIMS
 
 | Claim | Code | Proof |
 |---|---|---|
-| Only the current owner can request signatures; the old owner is refused after a sale or transfer | [`require_owner` lib.rs:210](contracts/handover/src/lib.rs#L210), [`request_transfer` wallet.rs:45](contracts/handover/src/wallet.rs#L45) | `request_transfer_rejects_non_owner`, `old_owner_refused_after_buy`, `old_owner_cannot_request_after_nft_transfer` |
-| Listing freezes signing; no listing while a request is in flight | [`assert_can_sign` wallet.rs:172](contracts/handover/src/wallet.rs#L172), [`list` market.rs:19](contracts/handover/src/market.rs#L19) | `request_transfer_rejected_while_listed`, `list_rejected_while_in_flight`, `no_second_request_while_in_flight` |
-| Nonces are strictly sequential; a failed MPC call never consumes one | [`finish_signing` wallet.rs:217](contracts/handover/src/wallet.rs#L217), [`mark_failed` wallet.rs:268](contracts/handover/src/wallet.rs#L268) | `nonces_are_strictly_sequential_and_log_is_ordered`, `failed_mpc_call_keeps_reservation_and_does_not_consume_nonce` |
-| Only plain ETH transfers can be built and signed (no calldata, so no approvals) | [`build_plain_transfer` tx.rs:71](contracts/handover/src/tx.rs#L71), [`is_plain_transfer` tx.rs:88](contracts/handover/src/tx.rs#L88) | `only_plain_transfers_can_be_built`, `transfer_parameter_validation` |
-| Reserved transaction keeps a failed attempt accounted for; `retry_reserved` re-signs the identical payload | [`retry_reserved` wallet.rs:109](contracts/handover/src/wallet.rs#L109), [`ReservedTx` types.rs:19](contracts/handover/src/types.rs#L19) | `new_request_rejected_while_reserved_even_with_different_args`, `retry_reserved_resigns_identical_payload_then_nonce_advances`, `list_rejected_while_reserved` |
-| `on_signed` never panics on a bad MPC response | [`on_signed` wallet.rs:142](contracts/handover/src/wallet.rs#L142) | `on_signed_never_panics_on_bad_responses_and_keeps_reservation` |
-| Signed transactions are canonical RLP even when `r` or `s` has a leading zero byte | [`assemble` tx.rs:145](contracts/handover/src/tx.rs#L145) | `canonical_rlp_when_r_has_leading_zero_byte`, `canonical_rlp_when_s_has_leading_zero_byte` |
-| The transaction hash matches an independent implementation (viem) | [`signing_hash` tx.rs:93](contracts/handover/src/tx.rs#L93) | `matches_independent_viem_vector`, `pnpm --filter checks check:4` |
-| `buy` is atomic: NFT moves, seller paid exactly the price, excess refunded | [`buy` market.rs:56](contracts/handover/src/market.rs#L56) | `buy_moves_nft_pays_seller_exactly_and_refunds_excess`, `buy_rejects_underpayment` |
-| `list` and `delist` need exactly 1 yocto | [market.rs:20](contracts/handover/src/market.rs#L20), [market.rs:44](contracts/handover/src/market.rs#L44) | `list_requires_exactly_one_yocto_not_zero`, `delist_requires_one_yocto` |
+| Only the current owner can request signatures; the old owner is refused after a sale or transfer | [`require_owner` lib.rs:231](contracts/handover/src/lib.rs#L231), [`request_transfer` wallet.rs:49](contracts/handover/src/wallet.rs#L49) | `request_transfer_rejects_non_owner`, `old_owner_refused_after_buy`, `old_owner_cannot_request_after_nft_transfer` |
+| Listing freezes signing; no listing while a request is in flight | [`assert_can_sign` wallet.rs:220](contracts/handover/src/wallet.rs#L220), [`list` market.rs:19](contracts/handover/src/market.rs#L19) | `request_transfer_rejected_while_listed`, `list_rejected_while_in_flight`, `no_second_request_while_in_flight` |
+| Nonces are strictly sequential; a failed MPC call never consumes one | [`finish_signing` wallet.rs:269](contracts/handover/src/wallet.rs#L269), [`mark_failed` wallet.rs:323](contracts/handover/src/wallet.rs#L323) | `nonces_are_strictly_sequential_and_log_is_ordered`, `failed_mpc_call_keeps_reservation_and_does_not_consume_nonce` |
+| Only plain ETH transfers can be built and signed (no calldata, so no approvals) | [`build_plain_transfer` tx.rs:79](contracts/handover/src/tx.rs#L79), [`is_plain_transfer` tx.rs:96](contracts/handover/src/tx.rs#L96) | `only_plain_transfers_can_be_built`, `transfer_parameter_validation` |
+| Reserved transaction keeps a failed attempt accounted for; `retry_reserved` re-signs the identical payload | [`retry_reserved` wallet.rs:115](contracts/handover/src/wallet.rs#L115), [`ReservedTx` types.rs:19](contracts/handover/src/types.rs#L19) | `new_request_rejected_while_reserved_even_with_different_args`, `retry_reserved_resigns_identical_payload_then_nonce_advances`, `list_rejected_while_reserved` |
+| `on_signed` never panics on a bad MPC response | [`on_signed` wallet.rs:181](contracts/handover/src/wallet.rs#L181) | `on_signed_never_panics_on_bad_responses_and_keeps_reservation` |
+| Signed transactions are canonical RLP even when `r` or `s` has a leading zero byte | [`assemble` tx.rs:153](contracts/handover/src/tx.rs#L153) | `canonical_rlp_when_r_has_leading_zero_byte`, `canonical_rlp_when_s_has_leading_zero_byte` |
+| The transaction hash matches an independent implementation (viem) | [`signing_hash` tx.rs:101](contracts/handover/src/tx.rs#L101) | `matches_independent_viem_vector`, `pnpm --filter checks check:4` |
+| `buy` is atomic: NFT moves, seller paid exactly the price, exact deposit required | [`buy` market.rs:59](contracts/handover/src/market.rs#L59) | `buy_moves_nft_pays_seller_exactly_and_creates_no_other_receipt`, `buy_rejects_underpayment`, `buy_rejects_overpayment` |
+| `list` and `delist` need exactly 1 yocto | [market.rs:20](contracts/handover/src/market.rs#L20), [market.rs:45](contracts/handover/src/market.rs#L45) | `list_requires_exactly_one_yocto_not_zero`, `delist_requires_one_yocto` |
 | No admin, upgrade or key-management code in the contract | all of `contracts/handover/src` | `production_sources_have_no_upgrade_or_key_management` |
-| Clean check: clean, dirty, busy and inconsistent verdicts | [`cleanCheck` check.ts:22](packages/cleancheck/src/check.ts#L22) | `check.test.ts` (happy paths, dirty, busy, inconsistent), `reserved.test.ts` |
-| Offline snapshot verification checks every logged transaction against its raw bytes | [`verifySnapshot` snapshot.ts:82](packages/cleancheck/src/snapshot.ts#L82) | `snapshot.test.ts` (`verifySnapshot`, committed fixtures) |
+| Clean check: clean, dirty, busy and inconsistent verdicts | [`cleanCheck` check.ts:25](packages/cleancheck/src/check.ts#L25) | `check.test.ts` (happy paths, dirty, busy, inconsistent), `reserved.test.ts` |
+| Offline snapshot verification checks every logged transaction against its raw bytes and its signer | [`verifySnapshot` snapshot.ts:83](packages/cleancheck/src/snapshot.ts#L83) | `snapshot.test.ts` (`verifySnapshot`, committed fixtures) |
 | Ethereum address derived from the MPC public key | [`ethAddressFromMpcKey` address.ts:41](packages/cleancheck/src/address.ts#L41) | `address.test.ts`; live agreement: pending evidence run |
 | The committed wasm matches its recorded hash | [`contracts/res/handover.wasm.sha256`](contracts/res/handover.wasm.sha256) | `make verify` step 4 |
 | MPC returns the signature shape the contract expects; full sale works on testnet and Sepolia | [`mpc.rs`](contracts/handover/src/mpc.rs) | pending evidence run (`check:2`, `check:5`, `evidence/`) |
 | Contract account has no access keys | n/a | pending evidence run (`evidence/access-keys.txt`) |
+
+Security-hardening pass (fixes F0 to F8, see section 14 "Independent review"):
+
+| Fix | Claim | Code | Proof |
+|---|---|---|---|
+| F0 | `new` is `#[private]`: only the contract account can initialise it, so deploy and init in one transaction cannot be front-run | [`new` lib.rs:117](contracts/handover/src/lib.rs#L117) | `new_rejects_non_contract_predecessor` (explicit check; the macro itself is enforced only in wasm) |
+| F1 | `buy` needs `expected_next_nonce` equal to `next_nonce` and exactly the price | [`buy` market.rs:59](contracts/handover/src/market.rs#L59) | `buy_rejects_wrong_expected_nonce`, `buy_rejected_when_wallet_changed_after_check`, `buy_after_delist_sign_relist_succeeds_with_fresh_nonce` |
+| F2 | `on_signed` parses the raw promise result by hand; a changed MPC response shape is a recorded failure, not a panic | [`read_signature_result` wallet.rs:199](contracts/handover/src/wallet.rs#L199) | `on_signed_records_failure_for_unexpected_promise_results` |
+| F3 | Bounded per-token state is prepaid at mint (measured storage + 1500 bytes, 0.015 NEAR) | [`nft_mint` lib.rs:158](contracts/handover/src/lib.rs#L158), [`TOKEN_STORAGE_BUFFER_BYTES` lib.rs:72](contracts/handover/src/lib.rs#L72) | `mint_keeps_measured_cost_plus_token_buffer`, `listing_reservation_and_transfer_to_fresh_account_fit_in_buffer` |
+| F4 | `release_stuck`: owner, 1 yocto, in flight, more than 300 blocks after the latest `sign` call; keeps the reservation | [`release_stuck` wallet.rs:151](contracts/handover/src/wallet.rs#L151), [`RELEASE_AFTER_BLOCKS` lib.rs:75](contracts/handover/src/lib.rs#L75) | `release_stuck_only_after_timeout_and_keeps_reservation`, `release_stuck_rejected_before_timeout`, `release_stuck_owner_only`, `release_stuck_rejected_when_not_in_flight`, `release_stuck_requires_one_yocto` |
+| F5 | `nft_transfer_call` freezes the wallet until `nft_resolve_transfer` clears the flag; clean check reports `busy` | [`nft_transfer_call` lib.rs:301](contracts/handover/src/lib.rs#L301), [`nft_resolve_transfer` lib.rs:329](contracts/handover/src/lib.rs#L329), [check.ts:97](packages/cleancheck/src/check.ts#L97) | `transfer_call_receiver_cannot_sign_during_call`, `pending_call_blocks_buy`, `resolver_clears_pending_flag_when_receiver_keeps_token`; `check.test.ts` "transfer_call_pending is busy" |
+| F6 | `gas_limit` exactly 21000, `max_fee_per_gas` at least 1 gwei, priority fee above 0 and not above max fee, `to` not zero, `value_wei` above 0 | [`validate_transfer` tx.rs:43](contracts/handover/src/tx.rs#L43) | `contract_rejects_gas_limit_other_than_21000`, `contract_rejects_dust_max_fee`, `contract_rejects_zero_address`, `contract_rejects_zero_value` |
+| F7 | Sign deposit at least `sign_fee` + 1 yocto; the contract keeps `sign_fee` and forwards the rest to MPC; no refund | [`mpc_deposit` wallet.rs:234](contracts/handover/src/wallet.rs#L234) | `request_transfer_rejects_deposit_equal_to_sign_fee`, `minimum_deposit_forwards_one_yocto_and_nothing_is_refunded` |
+| F8 | First signature pins `eth_address`; a signature from another key is a failed attempt; the clean check recovers every logged signer and compares with the derived address | [`finish_signing` wallet.rs:269](contracts/handover/src/wallet.rs#L269), [`signerRecoveryProblems` signers.ts:8](packages/cleancheck/src/signers.ts#L8), [check.ts:75](packages/cleancheck/src/check.ts#L75) | `first_signature_pins_eth_address_and_exposes_it`, `signature_from_a_different_key_is_a_failed_attempt`, `signer.test.ts`, fixture `inconsistent-wrong-signer.json` |
 
 ## 7. What is mocked or not built
 
@@ -117,9 +136,9 @@ Full table with one row per security requirement: [`docs/CLAIMS.md`](docs/CLAIMS
 - **Testnets only.** NEAR testnet and Ethereum Sepolia (`chain_id` 11155111). No mainnet, no real funds.
 - **Dynamic NFT metadata** is not built; token metadata is static.
 - **Check 3 and chainsig.js.** `checks/03-address-agreement.ts` cross-checks the address four ways: the MPC `derived_public_key` view, a pure noble derivation with the pinned testnet root key, the `chainsig.js` library, and the address recovered from a real signature. The `chainsig.js` route is reported as SKIPPED when the library does not load (it failed under Node 22 ESM in one install because of an `@noble/curves` version clash; with the committed lockfile it loaded and agreed in `--offline` mode). When skipped, the other routes still decide the verdict.
-- **`#[private]` on `on_signed`** is enforced by the NEAR SDK macro only in the compiled wasm, not in unit tests. The unit tests cover an explicit predecessor check in the function body; the macro itself is exercised only on testnet.
+- **`#[private]` on `on_signed` and `new`** is enforced by the NEAR SDK macro only in the compiled wasm, not in unit tests. The unit tests cover an explicit predecessor check in each function body; the macro itself is exercised only on testnet.
 - **Gas numbers.** Unit tests count host-function gas only. Real gas and MPC latency are not measured yet (section 11).
-- **Open contract risks:** the contract cannot check that a returned signature belongs to the token's derived key (it relies on the MPC contract, whose `respond` verifies it); a reserved transaction blocks transfers and sales until `retry_reserved` succeeds, so an MPC outage can lock a token; a signature obtained inside an `nft_transfer_call` window is logged normally. See [`contracts/handover/README.md`](contracts/handover/README.md).
+- **Open contract risks:** the contract does not know a token's derived key in advance, so the first accepted signature pins the address and it relies on the MPC contract, whose `respond` verifies signatures, for that first one; a reserved transaction blocks transfers and sales until `retry_reserved` succeeds, so an MPC outage can lock a token. The remaining limits are listed in section 14 ("Security model and limits") and in [`contracts/handover/README.md`](contracts/handover/README.md).
 - **The web UI** is a static SvelteKit app that reads the chain directly (no backend). It has been built (`make web`) and its chain layer unit-tested, but not exercised against a live deployment.
 
 ## 8. Try it in 30 seconds
@@ -131,30 +150,33 @@ git clone <this repository> && cd handover
 make verify
 ```
 
-`make verify` installs Node dependencies first if `node_modules` is missing, then runs: (1) the contract unit tests, (2) the clean-check library tests, (3) the clean-check CLI over every `evidence/snapshots/*.json` (none yet) and the synthetic fixtures, (4) `sha256sum -c` on the committed wasm. It exits non-zero if any step fails.
+`make verify` installs Node dependencies first if `node_modules` is missing, then runs: (1) the contract unit tests, (2) the clean-check library tests, (3) the clean-check CLI over every `evidence/snapshots/*.json` (none yet) and the 6 synthetic fixtures, (4) `sha256sum -c` on the committed wasm. It exits non-zero if any step fails.
 
-Output captured on this repository (warm Rust and Node caches, 6.4 s wall time; the per-fixture output is shown in full for one fixture and abbreviated for the others, and the absolute path is replaced by `/path/to/handover`; a cold first run also compiles the Rust dependencies and was not timed):
+Output captured on this repository (warm Rust and Node caches, 8 s wall time as reported by `make verify`; the per-fixture output is shown in full for two fixtures and abbreviated for the others, and the absolute path is replaced by `/path/to/handover`; a cold first run also compiles the Rust dependencies and was not timed):
 
 ```text
 [1/4] Contract unit tests (cargo test)
-test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.94s
+test result: ok. 97 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.85s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 [2/4] Clean-check library tests (vitest)
- Test Files  7 passed (7)
-      Tests  124 passed (124)
+ Test Files  8 passed (8)
+      Tests  136 passed (136)
 
 [3/4] Clean-check verdicts over committed snapshots
 No real snapshot committed yet (evidence/snapshots is empty): only synthetic fixtures below.
 
 Synthetic fixtures (packages/cleancheck/test/fixtures, NOT chain data):
+(busy-in-flight.json: BUSY, expected busy, OK)
+(clean-3-issued.json: CLEAN, expected clean, OK)
+
 == /path/to/handover/packages/cleancheck/test/fixtures/dirty-pending.json ==
 *** SYNTHETIC FIXTURE: hand-made for tests, NOT chain data ***
     Hand-made for tests (generated by test/fixtures/generate.ts). NOT chain data.
 
   Token                           0
   Contract                        synthetic.handover.test
-  Address                         0x1111111111111111111111111111111111111111
+  Address                         0x7e5f4552091a69125d5dfcb7b8c2659029395bdf
   Balance                         1 ETH (1000000000000000000 wei)
   Captured                        1970-01-01T00:00:00.000Z
   Signature log entries           3
@@ -165,8 +187,8 @@ Synthetic fixtures (packages/cleancheck/test/fixtures, NOT chain data):
 
   Pending signed transactions (2):
     nonce  to                                          value (wei)           mempool  tx hash
-    1      0x2222222222222222222222222222222222222222  2000000000000000      yes      0xc062ef02726d088ae4c0442d1fdfc79899479426a980be162d98f89ef61a7a8d
-    2      0x2222222222222222222222222222222222222222  3000000000000000      no       0x3a38ab84503a82dec125130ac7aa6f047cc48fbac9551f92a134aa9b3895be3f
+    1      0x2222222222222222222222222222222222222222  2000000000000000      yes      0xab1f1080cb31f3617c73f8fb6566b42fae3cd6743cf6a28456ba3d2478420ce2
+    2      0x2222222222222222222222222222222222222222  3000000000000000      no       0xa66073376c3d9c6ecee6f90bf72ecee44cfd55ad0c37552f753da0475048df24
 
   VERDICT: DIRTY
     - Contract issued 3 signatures (nonces 0-2); Sepolia confirmed nonce is 1.
@@ -174,23 +196,37 @@ Synthetic fixtures (packages/cleancheck/test/fixtures, NOT chain data):
     - One of them is already in the Sepolia mempool (nonce 1; pending nonce 2).
   expected: dirty  OK
 
-== /path/to/handover/packages/cleancheck/test/fixtures/clean-3-issued.json ==
-  VERDICT: CLEAN
-    - Contract issued 3 signatures (nonces 0-2); Sepolia confirmed nonce is 3. Every signature has been used.
-  expected: clean  OK
-
-(busy-in-flight.json: BUSY, expected busy, OK)
 (inconsistent-hash-mismatch.json: INCONSISTENT, expected inconsistent, OK)
 (inconsistent-missing-nonce.json: INCONSISTENT, expected inconsistent, OK)
+
+== /path/to/handover/packages/cleancheck/test/fixtures/inconsistent-wrong-signer.json ==
+*** SYNTHETIC FIXTURE: hand-made for tests, NOT chain data ***
+    Hand-made for tests (generated by test/fixtures/generate.ts). NOT chain data.
+
+  Token                           0
+  Contract                        synthetic.handover.test
+  Address                         0x7e5f4552091a69125d5dfcb7b8c2659029395bdf
+  Balance                         1 ETH (1000000000000000000 wei)
+  Captured                        1970-01-01T00:00:00.000Z
+  Signature log entries           3
+
+  Contract next_nonce (issued)    3
+  Sepolia nonce (latest)          3
+  Sepolia nonce (pending)         not checked
+
+  VERDICT: INCONSISTENT
+    - Signed transaction at nonce 1 was not signed by this wallet's key.
+    - Contract issued 3 signatures (nonces 0-2); Sepolia confirmed nonce is 3. Every signature has been used.
+  expected: inconsistent  OK
 
 [4/4] Committed wasm matches its sha256
 handover.wasm: OK
 
-VERIFY OK in 6s: contract tests pass, clean-check tests pass, 5 synthetic fixtures and 0 real snapshot(s) give the expected verdicts, wasm hash matches.
+VERIFY OK in 8s: contract tests pass, clean-check tests pass, 6 synthetic fixtures and 0 real snapshot(s) give the expected verdicts, wasm hash matches.
 Note: no real snapshot committed yet; real-chain proof is pending the evidence run (see evidence/README.md).
 ```
 
-The last three fixture lines are abbreviated here; the command prints the full report for each. When real snapshots from the evidence run are committed in `evidence/snapshots/`, step 3 prints their verdicts first.
+The abbreviated fixture lines are shortened here; the command prints the full report for each. When real snapshots from the evidence run are committed in `evidence/snapshots/`, step 3 prints their verdicts first.
 
 - **Hosted demo:** _not deployed yet; link to be filled after deploy_
 - **Contract account (NEAR testnet):** _not deployed yet; to be filled after deploy_
@@ -203,11 +239,11 @@ For the hosted demo (not deployed yet). You need two NEAR testnet accounts (a se
 
 1. **Mint.** Connect the seller account, open `/mint/`, mint. *See:* a new token and its derived Ethereum address (`0x...`).
 2. **Fund.** Copy the address and send Sepolia ETH to it from a faucet. *See:* the wallet page shows the balance after the next refresh.
-3. **Spend.** On `/wallet/?id=N` send `0.0001` ETH to any address (the call attaches the 0.01 NEAR sign fee and 300 Tgas). *See:* an Etherscan (Sepolia) link for the broadcast transaction, and a signature-log entry with nonce `0`.
+3. **Spend.** On `/wallet/?id=N` send `0.0001` ETH to any address (the call attaches the 0.01 NEAR sign fee plus 1 yocto and 300 Tgas; the contract keeps the fee and forwards the 1 yocto to MPC). *See:* an Etherscan (Sepolia) link for the broadcast transaction, and a signature-log entry with nonce `0`.
 4. **List.** Set a price and list. *See:* the wallet shows "Listed, signing frozen" (the contract refuses every signature request while listed); the verdict is `clean` once the Sepolia nonce equals the number of logged signatures. The same wallet appears on `/market/` with its verdict.
-5. **Buy.** Switch to the buyer account, open the listing, run the clean check, buy. The buy button is enabled only after a recent `clean` verdict. *See:* the NFT moves to the buyer and the price lands with the seller.
+5. **Buy.** Switch to the buyer account, open the listing, run the clean check, buy. The buy button is enabled only after a recent `clean` verdict, and the purchase attaches exactly the price and the `next_nonce` the check saw (`expected_next_nonce`). *See:* the NFT moves to the buyer and the price lands with the seller.
 6. **Buyer spends.** The buyer sends a small transfer from the wallet. *See:* it works, with the next nonce in the log.
-7. **Old owner refused.** Switch back to the seller and try to send. *See:* the transaction fails with the contract's message `Only the token owner can do this` ([`lib.rs:216`](contracts/handover/src/lib.rs#L216)). Before the sale, trying to send while listed fails with `Token is listed: delist to sign` ([`wallet.rs:173`](contracts/handover/src/wallet.rs#L173)).
+7. **Old owner refused.** Switch back to the seller and try to send. *See:* the transaction fails with the contract's message `Only the token owner can do this` ([`lib.rs:237`](contracts/handover/src/lib.rs#L237)). Before the sale, trying to send while listed fails with `Token is listed: delist to sign` ([`wallet.rs:221`](contracts/handover/src/wallet.rs#L221)).
 
 Without the hosted demo, the same states can be checked from a terminal with `make status TOKEN=0` once a contract is deployed and `.env` is set.
 
@@ -227,8 +263,8 @@ Without the hosted demo, the same states can be checked from a terminal with `ma
     derived_public_key (MPC view)        eth_getBalance, broadcast
               |
    Handover contract  contracts/handover/src
-     lib.rs     NEP-171/177/178/181, nft_mint, owner/transfer guards
-     wallet.rs  request_transfer, retry_reserved, on_signed (reserved tx, nonces, sig log)
+     lib.rs     NEP-171/177/178/181, nft_mint, owner/transfer guards, transfer-call lock
+     wallet.rs  request_transfer, retry_reserved, release_stuck, on_signed (reserved tx, nonces, sig log)
      market.rs  list, delist, buy
      tx.rs      builds the plain EIP-1559 transfer, hash, signature assembly
      mpc.rs     MPC request/response types, gas and deposit constants
@@ -240,7 +276,7 @@ Without the hosted demo, the same states can be checked from a terminal with `ma
 
 | Path | Contents |
 |---|---|
-| `contracts/handover/` | Rust contract and 67 unit tests (`src/tests.rs`) |
+| `contracts/handover/` | Rust contract and 97 unit tests (`src/tests.rs`) |
 | `contracts/res/` | built `handover.wasm`, `handover.wasm.sha256`, ABI, build record `BUILD.md` |
 | `packages/cleancheck/` | TypeScript library `@handover/cleancheck`, CLI `bin/handover.ts`, tests and fixtures |
 | `web/` | SvelteKit app (Svelte 5, static adapter); chain layer in `web/src/lib/chain/` |
@@ -256,13 +292,13 @@ Measured from the code in this repository today:
 
 | Item | Value | How to reproduce |
 |---|---|---|
-| Contract unit tests | 67 pass | `cargo test --manifest-path contracts/handover/Cargo.toml` |
-| Clean-check tests | 124 pass (7 files) | `pnpm --filter @handover/cleancheck test` |
-| Web chain-layer tests | 23 pass (4 files) | `pnpm --filter web test` |
-| `handover.wasm` size | 311477 bytes (304.2 KiB); NEAR transaction limit used for the deploy check is 1.5 MiB | `wc -c contracts/res/handover.wasm`, `make checks-offline` |
-| `handover.wasm` SHA-256 | `f000160a40d2380ff5b5abe3f0a4396d409d9e513c1f1a2df8b69a9192863510` | `make verify` step 4 |
-| `make verify` wall time | about 6 s with warm caches (Rust, Node) | `time make verify` |
-| Fixed constants | sign fee 0.01 NEAR, mint fee 0.05 NEAR, `sign` 50 Tgas static, `on_signed` 30 Tgas static, minimum prepaid 100 Tgas (300 recommended) | [`lib.rs`](contracts/handover/src/lib.rs), [`mpc.rs`](contracts/handover/src/mpc.rs) |
+| Contract unit tests | 97 pass | `cargo test --manifest-path contracts/handover/Cargo.toml` |
+| Clean-check tests | 136 pass (8 files) | `pnpm --filter @handover/cleancheck test` |
+| Web chain-layer tests | 32 pass (4 files) | `pnpm --filter web test` |
+| `handover.wasm` size | 316931 bytes (309.5 KiB); NEAR transaction limit used for the deploy check is 1.5 MiB | `wc -c contracts/res/handover.wasm`, `make checks-offline` |
+| `handover.wasm` SHA-256 | `66deed9e8ad380fac2a7b6bc19b0003ae455e0ffdff6709e36906518dc069eab` | `make verify` step 4 |
+| `make verify` wall time | 8 s in the run shown in section 8, warm caches (Rust, Node) | `time make verify` |
+| Fixed constants | sign fee 0.01 NEAR (deposit must exceed it by at least 1 yocto), mint fee 0.05 NEAR (of which a 0.015 NEAR per-token storage buffer is kept), `release_stuck` after 300 blocks, `gas_limit` 21000, `sign` 50 Tgas static, `on_signed` 30 Tgas static, minimum prepaid 100 Tgas (300 recommended) | [`lib.rs`](contracts/handover/src/lib.rs), [`mpc.rs`](contracts/handover/src/mpc.rs) |
 
 **To be measured in the evidence run (not measured yet, no numbers are claimed):** MPC sign latency (check 2), total gas of `request_transfer` and `on_signed` on testnet (check 2), storage cost per logged signature, signatures per wallet in the demo, and the evidence run summary (check 5, snapshots). Build details for the wasm: [`contracts/res/BUILD.md`](contracts/res/BUILD.md).
 
@@ -278,7 +314,7 @@ All project code in this repository was written during the hackathon window (fir
 | Contract | `hex` | 0.4.3 |
 | Contract tests only | `k256`, `rlp` | 0.13.4, 0.6.1 |
 | Build | `rustc`, `cargo-near` | 1.97.0, 0.22.0 |
-| Clean check | `@noble/hashes` | 2.4.0 |
+| Clean check | `@noble/hashes`, `@noble/curves` (signer recovery) | 2.4.0, 2.4.0 |
 | Clean check, checks, web | `typescript`, `tsx`, `vitest` | 6.0.3, 4.23.15, 5.1.0 |
 | Checks | `chainsig.js`, `viem`, `@noble/curves`, `@scure/base` | 1.1.16, 2.57.16, 2.4.0, 2.4.0 |
 | Web | `svelte`, `@sveltejs/kit`, `@sveltejs/adapter-static`, `vite` | 5.57.3, 3.1.1, 4.0.1, 8.3.5 |
@@ -337,8 +373,9 @@ The commands below use near-cli-rs 0.30.x syntax. They were written for this REA
 near account create-account fund-myself $CONTRACT '10 NEAR' autogenerate-new-keypair save-to-legacy-keychain \
   sign-as $NEAR_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
 
-# 3. Deploy AND initialise in one transaction. `new` has no caller restriction, so initialise in
-#    the same transaction as the deploy; otherwise anyone could call it first with other arguments.
+# 3. Deploy AND initialise in one transaction. `new` is #[private]: only the contract account itself
+#    can call it, so it must run as part of the deploy transaction, which the contract account
+#    itself signs. Nobody else can initialise the contract first, so init cannot be front-run.
 near contract deploy $CONTRACT use-file contracts/res/handover.wasm \
   with-init-call new json-args '{"mpc_contract_id":"v1.signer-prod.testnet","chain_id":11155111}' \
   prepaid-gas '30 Tgas' attached-deposit '0 NEAR' \
@@ -351,17 +388,27 @@ near contract call-function as-transaction $CONTRACT nft_mint json-args '{}' \
 
 near contract call-function as-transaction $CONTRACT request_transfer \
   json-args '{"token_id":"0","to":"0x000000000000000000000000000000000000dEaD","value_wei":"100000000000000","gas_limit":"21000","max_fee_per_gas":"30000000000","max_priority_fee_per_gas":"1000000000"}' \
-  prepaid-gas '300 Tgas' attached-deposit '0.01 NEAR' \
+  prepaid-gas '300 Tgas' attached-deposit '10000000000000000000001 yoctoNEAR' \
   sign-as $NEAR_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
+# The deposit is the 0.01 NEAR sign fee plus 1 yocto. The contract keeps the fee and forwards the
+# 1 yocto to MPC. Nothing is refunded, so do not attach more.
 
 near contract call-function as-transaction $CONTRACT list \
   json-args '{"token_id":"0","price":"1000000000000000000000000"}' \
   prepaid-gas '100 Tgas' attached-deposit '1 yoctoNEAR' \
   sign-as $NEAR_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
 
-near contract call-function as-transaction $CONTRACT buy json-args '{"token_id":"0"}' \
+# expected_next_nonce is the next_nonce the buyer's clean check saw (get_wallet); it is 1 here, after
+# the one transfer above. The deposit must equal the listed price exactly (1 NEAR); less or more is rejected.
+near contract call-function as-transaction $CONTRACT buy json-args '{"token_id":"0","expected_next_nonce":1}' \
   prepaid-gas '100 Tgas' attached-deposit '1 NEAR' \
   sign-as $BUYER_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
+
+# If a signing request never calls back (in flight for more than 300 blocks), the owner can unlock it.
+# The reservation stays; follow with retry_reserved.
+near contract call-function as-transaction $CONTRACT release_stuck json-args '{"token_id":"0"}' \
+  prepaid-gas '100 Tgas' attached-deposit '1 yoctoNEAR' \
+  sign-as $NEAR_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
 
 # 5. Views.
 near contract call-function as-read-only $CONTRACT get_wallet json-args '{"token_id":"0"}' network-config testnet now
@@ -384,11 +431,31 @@ Deleting the keys is irreversible: the contract can no longer be upgraded, and i
 
 - **Trust in NEAR's MPC network.** Handover's guarantee is that only the contract can request signatures for a wallet's address. Whoever can break or collude inside the MPC network could sign for any derived address. The contract does not re-verify that a returned signature belongs to the token's derived key; the MPC contract's `respond` does.
 - **`nft_transfer` gifting is not protected.** A plain NEP-171 transfer works (when the token is not listed, in flight or reserved), but it carries no clean check. A recipient must run the clean check (CLI `handover status`, or the wallet page) before accepting a wallet, and treat `dirty`, `busy` and `inconsistent` as unsafe. The safe path is `list` and `buy`.
-- **Reserved transactions can lock a token.** If an MPC call fails or times out, the token stays unsellable and untransferable until `retry_reserved` succeeds. During an MPC outage this lasts as long as the outage. This is deliberate: the alternative is a possible unlogged signature.
+- **Reserved transactions can lock a token.** If an MPC call fails or times out, the token stays unsellable and untransferable until `retry_reserved` succeeds. During an MPC outage this lasts as long as the outage. This is deliberate: the alternative is a possible unlogged signature. `release_stuck` (after 300 blocks) only clears `in_flight`; it never drops the reservation.
 - **Standing approvals cannot be created through the contract.** The address is derived from the contract and only the contract can sign for it, and the contract only signs plain ETH transfers it built (no calldata), so no ERC-20 `approve`, `setApprovalForAll` or other contract call can ever be signed for a Handover address.
 - **The clean check is a point-in-time check.** It is valid for a listed wallet because listing freezes signing. Buyers should re-run it immediately before buying; the web app does this and enables the buy button only after a clean check within the last 60 seconds.
-- **Storage.** Each logged signature costs contract storage, paid from the sign fee. After the keys are deleted the contract cannot be topped up by its owner.
+- **Storage.** Each logged signature costs contract storage, paid from the sign fee. The bounded per-token state (wallet, listing, reservation, owner-set entry, transfer-call marker, pinned address) is prepaid at mint by a 1500-byte buffer (0.015 NEAR) on top of the measured cost. After the keys are deleted the contract cannot be topped up by its owner.
 - **Testnet software, not audited.** No third-party audit.
+
+#### Independent review
+
+An internal adversarial review of the contract, the clean check and the UI found problems that were fixed before this documentation was written (fixes F0 to F8, claims table in section 6 and `docs/CLAIMS.md` section G). In short:
+
+- `buy` was not bound to the state the buyer had checked, so a seller could delist, sign and relist between the check and the purchase (fixed: `expected_next_nonce` and exact price).
+- The MPC callback deserialised its input with a typed callback result, and per-token storage could be griefed; either could leave a token frozen with `in_flight` set (fixed: raw promise result parsed by hand, per-token state prepaid at mint, `release_stuck`).
+- The `nft_transfer_call` return path let a temporary owner obtain signatures during the call (fixed: transfer-call lock).
+- Transactions with very low fees could be signed that nodes would not mine, leaving the nonce stuck (fixed: `gas_limit` exactly 21000, `max_fee_per_gas` at least 1 gwei, priority fee rules).
+- `new` could be front-run when deploy and init were separate transactions (fixed: `#[private]`, deploy and init in one transaction).
+
+This is a description of what was changed, not an audit report, and the limits below remain.
+
+#### Residual limits
+
+- **Seller payout to a deleted account.** If the seller's account no longer exists when `buy` runs, the payment transfer fails and the funds stay with the contract. Sellers should keep their account alive until a sale completes.
+- **Resolver out of gas.** If `nft_resolve_transfer` runs out of gas after an `nft_transfer_call`, `transfer_call_pending` is never cleared and that token stays frozen. The contract has no method to clear it.
+- **21000 gas.** Only plain transfers with `gas_limit` exactly 21000 can be signed. A recipient that is a contract with custom `receive` logic may need more gas and fail on Ethereum.
+- **Signatures from earlier code.** Any code deployed earlier at the same contract account, before its keys were deleted, could have asked MPC for signatures for these derived addresses without them appearing in the log. The clean check cannot see those. Before buying, check the contract account's deploy history and that no full-access keys remain (`near account list-keys`).
+- **Stale MPC failure.** A stale MPC failure callback can only arrive within the 200-block yield window, which ends before `release_stuck` is allowed (300 blocks).
 
 ### Roadmap
 

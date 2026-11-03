@@ -54,7 +54,7 @@ const TRANSFER_VALUE_WEI = '100000000000000'; // 0.0001 ETH
 const GAS_LIMIT = '21000';
 const MAX_FEE = '30000000000'; // 30 gwei
 const MAX_PRIO = '1000000000'; // 1 gwei
-const SIGN_FEE_NEAR = '0.01 NEAR'; // SPEC D3: request_transfer needs >= 0.01 NEAR; excess is refunded
+const SIGN_DEPOSIT = '10000000000000000000001 yoctoNEAR'; // sign fee (0.01 NEAR) + 1 yocto; the contract keeps the fee and forwards the rest to MPC, no refund
 const ALREADY_DONE = /nonce too low|already known|known transaction|already imported|already exists/i;
 const DEFAULT_TO = '0x000000000000000000000000000000000000dEaD';
 
@@ -81,7 +81,7 @@ function requestCommand(contract: string, account: string, tokenId: string, to: 
     'request_transfer',
     `json-args '${args}'`,
     "prepaid-gas '300 Tgas'",
-    `attached-deposit '${SIGN_FEE_NEAR}'`,
+    `attached-deposit '${SIGN_DEPOSIT}'`,
     `sign-as ${account}`,
     'network-config testnet sign-with-legacy-keychain send',
   ].join(' \\\n  ');
