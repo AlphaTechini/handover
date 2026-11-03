@@ -6,6 +6,7 @@ export function fromWalletView(v: WalletView): WalletInput {
     nextNonce: v.next_nonce,
     inFlight: v.in_flight,
     listed: v.listing != null,
+    ...(v.reserved != null ? { reserved: { nonce: v.reserved.nonce } } : {}),
   };
 }
 

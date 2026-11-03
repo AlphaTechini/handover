@@ -13,6 +13,18 @@ export interface ListingView {
   listed_at_ns: string;
 }
 
+export interface ReservedTxView {
+  nonce: number;
+  to: string;
+  value_wei: string;
+  gas_limit: string;
+  max_fee_per_gas: string;
+  max_priority_fee_per_gas: string;
+  payload_hash_hex: string;
+  requested_at_ns: string;
+  attempts: number;
+}
+
 export interface WalletView {
   token_id: string;
   owner_id: string;
@@ -22,6 +34,8 @@ export interface WalletView {
   listing: ListingView | null;
   sig_count: number;
   minted_at_ns: string;
+  /** Transaction reserved by a signing attempt that did not complete. Absent in old fixtures. */
+  reserved?: ReservedTxView | null;
 }
 
 export interface SignedTxView {
@@ -46,6 +60,8 @@ export interface WalletInput {
   nextNonce: number;
   inFlight: boolean;
   listed: boolean;
+  /** Set when a signing attempt for this nonce did not complete. */
+  reserved?: { nonce: number } | null;
 }
 
 export interface SignedTxRecord {

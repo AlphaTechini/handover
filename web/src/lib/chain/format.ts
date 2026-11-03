@@ -5,3 +5,6 @@ export function parseEth(eth: string): bigint { const [i, f = ''] = eth.trim().s
 export function parseNear(near: string): bigint { const [i, f = ''] = near.trim().split('.'); return BigInt(i || '0') * 10n ** 24n + BigInt((f + '0'.repeat(24)).slice(0, 24)); }
 export const shortHex = (h: string, n = 4) => (h.length > 2 + n * 2 ? `${h.slice(0, 2 + n)}…${h.slice(-n)}` : h);
 export const nsToDate = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n));
+/** wei -> gwei string, e.g. 1500000000n -> "1.5" */
+export function formatGwei(wei: bigint, digits = 3): string { const s = wei.toString().padStart(10, '0'); const i = s.slice(0, -9); const f = s.slice(-9).slice(0, digits).replace(/0+$/, ''); return f ? `${i}.${f}` : i; }
+export const isEthAddress = (a: string): a is `0x${string}` => /^0x[0-9a-fA-F]{40}$/.test(a);

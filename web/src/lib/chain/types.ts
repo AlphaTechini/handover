@@ -11,6 +11,19 @@ export interface Listing {
 	listedAtNs: string;
 }
 
+/** Transaction reserved by a signing attempt that has not completed (a signature for it may exist). */
+export interface ReservedTx {
+	nonce: number;
+	to: Hex;
+	valueWei: string;
+	gasLimit: string;
+	maxFeePerGas: string;
+	maxPriorityFeePerGas: string;
+	payloadHashHex: string;
+	requestedAtNs: string;
+	attempts: number;
+}
+
 export interface WalletState {
 	tokenId: string;
 	ownerId: string;
@@ -23,6 +36,8 @@ export interface WalletState {
 	listing: Listing | null;
 	sigCount: number;
 	mintedAtNs: string;
+	/** Set when a signing attempt did not complete; the owner must call retryReserved */
+	reserved: ReservedTx | null;
 }
 
 export interface SignedTx {
@@ -41,6 +56,10 @@ export interface ContractConfig {
 	mpcContractId: string;
 	chainId: number;
 	pathPrefix: string;
+	/** Minimum deposit for request_transfer / retry_reserved, yoctoNEAR */
+	signFeeYocto: string;
+	/** Minimum deposit for nft_mint, yoctoNEAR */
+	mintFeeYocto: string;
 }
 
 export interface EthFees {

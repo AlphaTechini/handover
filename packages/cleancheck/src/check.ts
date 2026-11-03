@@ -13,6 +13,7 @@ import type {
  *  1. The signature log must hold exactly nonces 0..nextNonce-1, once each.
  *  2. The chain must not be ahead of the contract (confirmed, and pending if given).
  *  3. A signature request in flight is "busy".
+ *  3b. A reserved (uncompleted) signing attempt is also "busy".
  *  4. confirmed < nextNonce is "dirty"; pending = log entries with nonce >= confirmed.
  *  5. Otherwise "clean".
  *
@@ -63,6 +64,11 @@ export function cleanCheck(
       );
     }
   }
+  if (wallet.reserved != null && wallet.reserved.nonce !== issued) {
+    chainProblems.push(
+      `Reserved transaction has nonce ${wallet.reserved.nonce} but the contract's next nonce is ${issued}.`,
+    );
+  }
   if (chainProblems.length > 0) return done('inconsistent', chainProblems);
 
   const summary = issuedSummary(issued, confirmed);
@@ -72,6 +78,14 @@ export function cleanCheck(
     return done('busy', [
       summary,
       'A signature request is in flight; a new signed transaction may appear.',
+    ]);
+  }
+
+  // 3b. A reserved transaction means a signature for it may exist without being logged.
+  if (wallet.reserved != null) {
+    return done('busy', [
+      summary,
+      `Signing attempt for nonce ${wallet.reserved.nonce} did not complete; a signature for that exact transaction may exist. The owner must retry it before this wallet can be sold.`,
     ]);
   }
 
@@ -160,6 +174,7 @@ function validateInputs(wallet: WalletInput, sigLog: SignedTxRecord[], chain: Ch
   assertNonNegInt(wallet.nextNonce, 'wallet.nextNonce');
   assertBool(wallet.inFlight, 'wallet.inFlight');
   assertBool(wallet.listed, 'wallet.listed');
+  if (wallet.reserved != null) assertNonNegInt(wallet.reserved.nonce, 'wallet.reserved.nonce');
 
   if (!Array.isArray(sigLog)) throw new TypeError('sigLog must be an array');
   for (const [i, e] of sigLog.entries()) {
