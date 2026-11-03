@@ -12,10 +12,12 @@ use omni_transaction::{TransactionBuilder, TxBuilder, EVM};
 
 /// Ethereum Sepolia.
 pub const SEPOLIA_CHAIN_ID: u64 = 11_155_111;
-/// Gas of a plain ETH transfer, and our upper bound (a plain transfer never needs more; a
-/// generous cap still leaves no room to hide a contract call, because input is empty).
-pub const MIN_GAS_LIMIT: u128 = 21_000;
-pub const MAX_GAS_LIMIT: u128 = 100_000;
+/// Gas of a plain ETH transfer. The only gas limit the contract signs: a higher limit would
+/// let a seller pre-fund a contract recipient with receive() logic, and 21000 is exact for EOAs.
+pub const TRANSFER_GAS_LIMIT: u128 = 21_000;
+/// Lowest accepted `max_fee_per_gas` (1 gwei), so a signed tx cannot be made unmineable for
+/// years by setting a dust fee (it would stay a valid pre-signed tx in the log).
+pub const MIN_MAX_FEE_PER_GAS: u128 = 1_000_000_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransferParams {
@@ -49,11 +51,17 @@ pub fn validate_transfer(
     if value_wei == 0 {
         return Err("value_wei must be greater than 0");
     }
-    if !(MIN_GAS_LIMIT..=MAX_GAS_LIMIT).contains(&gas_limit) {
-        return Err("gas_limit must be between 21000 and 100000");
+    if to == [0u8; 20] {
+        return Err("`to` must not be the zero address");
     }
-    if max_fee_per_gas == 0 || max_priority_fee_per_gas == 0 {
-        return Err("fee values must be greater than 0");
+    if gas_limit != TRANSFER_GAS_LIMIT {
+        return Err("gas_limit must be exactly 21000");
+    }
+    if max_fee_per_gas < MIN_MAX_FEE_PER_GAS {
+        return Err("max_fee_per_gas must be at least 1 gwei (10^9 wei)");
+    }
+    if max_priority_fee_per_gas == 0 {
+        return Err("max_priority_fee_per_gas must be greater than 0");
     }
     if max_priority_fee_per_gas > max_fee_per_gas {
         return Err("max_priority_fee_per_gas must not exceed max_fee_per_gas");
@@ -151,11 +159,17 @@ pub fn assemble(tx: &EVMTransaction, sig: &ParsedSig) -> Vec<u8> {
     tx.build_with_signature(&signature)
 }
 
-/// Check that `sig` is a valid, low-s, recoverable signature over `hash`. This is the same
-/// check the MPC contract performs in `respond`; repeating it means we never log garbage.
-pub fn signature_recovers(hash: &[u8; 32], sig: &ParsedSig) -> bool {
+/// Recover the signer's Ethereum address from a valid, low-s, recoverable signature over
+/// `hash`, or None if the signature is invalid. Same check the MPC contract performs in
+/// `respond`; repeating it means we never log garbage, and the address feeds the
+/// trust-on-first-use pin (F8).
+pub fn recover_address(hash: &[u8; 32], sig: &ParsedSig) -> Option<[u8; 20]> {
     let mut rs = [0u8; 64];
     rs[..32].copy_from_slice(&sig.r);
     rs[32..].copy_from_slice(&sig.s);
-    env::ecrecover(hash, &rs, sig.recovery_id, true).is_some()
+    let pubkey = env::ecrecover(hash, &rs, sig.recovery_id, true)?;
+    let digest = env::keccak256_array(pubkey);
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&digest[12..]);
+    Some(out)
 }

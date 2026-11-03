@@ -49,6 +49,14 @@ struct SignFailed<'a> {
 
 #[derive(Serialize)]
 #[serde(crate = "near_sdk::serde")]
+struct Released<'a> {
+    token_id: &'a str,
+    owner_id: &'a AccountId,
+    nonce: u64,
+}
+
+#[derive(Serialize)]
+#[serde(crate = "near_sdk::serde")]
 struct Listed<'a> {
     token_id: &'a str,
     seller_id: &'a AccountId,
@@ -152,6 +160,17 @@ pub fn sold(token_id: &str, seller_id: &AccountId, buyer_id: &AccountId, price: 
             seller_id,
             buyer_id,
             price: U128(price),
+        },
+    );
+}
+
+pub fn released(token_id: &str, owner_id: &AccountId, nonce: u64) {
+    emit(
+        "released",
+        &Released {
+            token_id,
+            owner_id,
+            nonce,
         },
     );
 }

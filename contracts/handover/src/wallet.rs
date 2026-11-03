@@ -9,15 +9,18 @@
 //!  reserved & !in_flight --retry_reserved--> in_flight (same exact transaction)
 //! ```
 //!
+//! `release_stuck` (owner, after RELEASE_AFTER_BLOCKS) turns a never-delivered in-flight attempt
+//! into the failed-attempt state (in_flight=false, reservation kept).
+//!
 //! A failed MPC call never consumes a nonce and never frees the reservation, because the MPC
 //! network may have published a signature on chain even though our callback saw a failure.
 
 use crate::mpc::*;
 use crate::tx::{self, TransferParams};
 use crate::types::*;
-use crate::{events, Handover, HandoverExt, PATH_PREFIX, SIGN_FEE};
+use crate::{events, Handover, HandoverExt, PATH_PREFIX, RELEASE_AFTER_BLOCKS, SIGN_FEE};
 use near_sdk::json_types::U128;
-use near_sdk::{env, near, require, AccountId, NearToken, Promise, PromiseError};
+use near_sdk::{assert_one_yocto, env, near, require, NearToken, Promise};
 
 impl ReservedTx {
     fn params(&self) -> TransferParams {
@@ -35,10 +38,11 @@ impl ReservedTx {
 impl Handover {
     /// Ask MPC to sign a plain ETH transfer from this token's address. Owner only.
     ///
-    /// Deposit: at least `SIGN_FEE` (0.01 NEAR). Exactly 1 yocto is forwarded to MPC; the rest of
-    /// `SIGN_FEE` stays here to pay for the log/reservation storage; anything above `SIGN_FEE` is
-    /// refunded to the caller. Attach 300 Tgas. Returns the logged `SignedTxView` (via callback)
-    /// or null if signing failed (then call `retry_reserved`).
+    /// Deposit: more than `SIGN_FEE` (at least `SIGN_FEE` + 1 yocto). The contract keeps
+    /// `SIGN_FEE` to pay for the log/reservation storage and forwards the REST to the MPC `sign`
+    /// call as its fee (no refund to the caller, so callers can follow a future MPC fee change).
+    /// Attach 300 Tgas. Returns the logged `SignedTxView` (via callback) or null if signing
+    /// failed (then call `retry_reserved`).
     ///
     /// There is intentionally NO parameter for calldata, access list, or chain id.
     #[payable]
@@ -52,6 +56,7 @@ impl Handover {
         max_priority_fee_per_gas: U128,
     ) -> Promise {
         let owner = self.require_owner(&token_id);
+        self.assert_no_transfer_call(&token_id);
         let params = tx::validate_transfer(
             &to,
             value_wei.0,
@@ -66,7 +71,7 @@ impl Handover {
             self.wallet(&token_id).reserved.is_none(),
             "A reserved transaction is pending: call retry_reserved"
         );
-        self.charge_sign_fee(&owner);
+        let mpc_deposit = Self::mpc_deposit();
 
         let chain_id = self.chain_id;
         let wallet = self.wallet_mut(&token_id);
@@ -87,6 +92,7 @@ impl Handover {
             max_priority_fee_per_gas: params.max_priority_fee_per_gas,
             payload_hash,
             requested_at_ns: env::block_timestamp(),
+            requested_at_block: env::block_height(),
             attempts: 1,
         });
         events::sign_requested(
@@ -98,7 +104,7 @@ impl Handover {
             &payload_hash,
             1,
         );
-        self.sign_promise(&token_id, nonce, &payload_hash)
+        self.sign_promise(&token_id, nonce, &payload_hash, mpc_deposit)
     }
 
     /// Re-request a signature for the exact transaction reserved by an earlier attempt whose
@@ -108,12 +114,13 @@ impl Handover {
     #[payable]
     pub fn retry_reserved(&mut self, token_id: TokenId) -> Promise {
         let owner = self.require_owner(&token_id);
+        self.assert_no_transfer_call(&token_id);
         self.assert_can_sign(&token_id);
         require!(
             self.wallet(&token_id).reserved.is_some(),
             "Nothing is reserved"
         );
-        self.charge_sign_fee(&owner);
+        let mpc_deposit = Self::mpc_deposit();
 
         let chain_id = self.chain_id;
         let wallet = self.wallet_mut(&token_id);
@@ -126,28 +133,56 @@ impl Handover {
             "Reserved payload does not match its hash"
         );
         reserved.attempts = reserved.attempts.saturating_add(1);
+        reserved.requested_at_block = env::block_height();
         let (nonce, hash, attempt) = (reserved.nonce, reserved.payload_hash, reserved.attempts);
         let (to, value) = (reserved.to, reserved.value_wei);
         wallet.in_flight = true;
         events::sign_requested(&token_id, &owner, nonce, &to, value, &hash, attempt);
-        self.sign_promise(&token_id, nonce, &hash)
+        self.sign_promise(&token_id, nonce, &hash, mpc_deposit)
+    }
+
+    /// Recovery when the in-flight attempt never calls back (for example the callback ran out
+    /// of gas): owner only, exactly 1 yocto, only while `in_flight` and more than
+    /// `RELEASE_AFTER_BLOCKS` blocks after the latest `sign` call (MPC's own yield timeout is
+    /// 200 blocks). Clears `in_flight` and KEEPS the reservation, which is exactly the state of
+    /// a failed attempt, so it cannot lose track of a signature that may exist. Use
+    /// `retry_reserved` afterwards.
+    #[payable]
+    pub fn release_stuck(&mut self, token_id: TokenId) {
+        assert_one_yocto();
+        let owner = self.require_owner(&token_id);
+        let wallet = self.wallet_mut(&token_id);
+        require!(wallet.in_flight, "Nothing is in flight");
+        let Some(reserved) = wallet.reserved.as_ref() else {
+            env::panic_str("Nothing is reserved");
+        };
+        require!(
+            env::block_height()
+                > reserved
+                    .requested_at_block
+                    .saturating_add(RELEASE_AFTER_BLOCKS),
+            "Too early to release: the signature request may still complete"
+        );
+        let nonce = reserved.nonce;
+        wallet.in_flight = false;
+        events::released(&token_id, &owner, nonce);
     }
 
     /// MPC callback. NEVER panics once authorised: every parse/validation problem is treated as
     /// a failed attempt that leaves the reservation in place (decision D1).
     ///
+    /// The promise result is read and parsed by hand (no typed `#[callback_result]`), so an
+    /// MPC response of an unexpected shape, garbage bytes or a failed promise are all recorded
+    /// as `sign_failed` instead of aborting the callback.
+    ///
     /// `#[private]` is enforced only in the compiled wasm wrapper, not in unit tests, so the
     /// explicit predecessor check below makes the same rule testable and survives refactors.
     #[private]
-    pub fn on_signed(
-        &mut self,
-        token_id: TokenId,
-        nonce: u64,
-        #[callback_result] result: Result<SignatureResponse, PromiseError>,
-    ) -> Option<SignedTxView> {
+    pub fn on_signed(&mut self, token_id: TokenId, nonce: u64) -> Option<SignedTxView> {
         if env::predecessor_account_id() != env::current_account_id() {
             env::panic_str("Method on_signed is private");
         }
+        let result = read_signature_result();
         match self.finish_signing(&token_id, nonce, result) {
             Ok(view) => Some(view),
             Err(reason) => {
@@ -156,6 +191,19 @@ impl Handover {
             }
         }
     }
+}
+
+/// Upper bound for the MPC response we are willing to read (a real one is ~200 bytes).
+const MAX_RESPONSE_BYTES: usize = 4096;
+
+fn read_signature_result() -> Result<SignatureResponse, &'static str> {
+    if env::promise_results_count() != 1 {
+        return Err("unexpected number of promise results");
+    }
+    let bytes = env::promise_result_checked(0, MAX_RESPONSE_BYTES)
+        .map_err(|_| "MPC call failed, timed out or returned too much data")?;
+    near_sdk::serde_json::from_slice::<SignatureResponse>(&bytes)
+        .map_err(|_| "MPC response has an unexpected shape")
 }
 
 // ------------------------------------------------------------------------------ internals
@@ -181,27 +229,31 @@ impl Handover {
         );
     }
 
-    /// Require `SIGN_FEE`; refund anything above it to the caller right away.
-    fn charge_sign_fee(&self, payer: &AccountId) {
+    /// Deposit rule: more than `SIGN_FEE`. The contract keeps `SIGN_FEE`; the rest (at least
+    /// 1 yocto) is what gets forwarded to MPC.
+    fn mpc_deposit() -> NearToken {
         let deposit = env::attached_deposit();
         require!(
-            deposit >= SIGN_FEE,
-            "Attach at least 0.01 NEAR (storage + MPC fee)"
+            deposit > SIGN_FEE,
+            "Attach at least 0.01 NEAR + 1 yocto (storage fee + MPC fee)"
         );
-        let excess = deposit.saturating_sub(SIGN_FEE);
-        if excess > NearToken::from_yoctonear(0) {
-            Promise::new(payer.clone()).transfer(excess).detach();
-        }
+        deposit.saturating_sub(SIGN_FEE)
     }
 
-    fn sign_promise(&self, token_id: &str, nonce: u64, payload_hash: &[u8; 32]) -> Promise {
+    fn sign_promise(
+        &self,
+        token_id: &str,
+        nonce: u64,
+        payload_hash: &[u8; 32],
+        mpc_deposit: NearToken,
+    ) -> Promise {
         let request = SignRequestArgs {
             path: format!("{PATH_PREFIX}{token_id}"),
             payload_v2: PayloadV2::Ecdsa(hex::encode(payload_hash)),
             domain_id: MPC_DOMAIN_ID,
         };
         ext_mpc::ext(self.mpc_contract_id.clone())
-            .with_attached_deposit(MPC_DEPOSIT)
+            .with_attached_deposit(mpc_deposit)
             .with_static_gas(SIGN_GAS)
             .with_unused_gas_weight(1)
             .sign(request)
@@ -218,7 +270,7 @@ impl Handover {
         &mut self,
         token_id: &str,
         nonce: u64,
-        result: Result<SignatureResponse, PromiseError>,
+        result: Result<SignatureResponse, &'static str>,
     ) -> Result<SignedTxView, &'static str> {
         let chain_id = self.chain_id;
         let wallet = self.wallets.get(token_id).ok_or("unknown wallet")?;
@@ -227,7 +279,7 @@ impl Handover {
         if !wallet.in_flight || reserved.nonce != nonce || wallet.next_nonce != nonce {
             return Err("stale callback");
         }
-        let response = result.map_err(|_| "MPC call failed or timed out")?;
+        let response = result?;
         let sig = tx::parse_response(&response)?;
         // Rebuild the transaction from the reservation; never from callback data.
         let built = tx::build_plain_transfer(chain_id, nonce, &reserved.params());
@@ -235,8 +287,10 @@ impl Handover {
         if hash != reserved.payload_hash {
             return Err("reserved payload hash mismatch");
         }
-        if !tx::signature_recovers(&hash, &sig) {
-            return Err("signature does not verify");
+        let signer = tx::recover_address(&hash, &sig).ok_or("signature does not verify")?;
+        // Trust on first use: the first accepted signature pins the wallet's address.
+        if wallet.eth_address.is_some_and(|pinned| pinned != signer) {
+            return Err("signature recovers to a different address than the pinned one");
         }
         let raw = tx::assemble(&built, &sig);
         let entry = SignedTx {
@@ -257,6 +311,7 @@ impl Handover {
             .insert((token_id.to_string(), nonce), entry.clone());
         if let Some(w) = self.wallets.get_mut(token_id) {
             w.next_nonce = next;
+            w.eth_address = Some(signer);
             w.in_flight = false;
             w.reserved = None;
         }

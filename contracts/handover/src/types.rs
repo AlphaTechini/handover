@@ -25,6 +25,8 @@ pub struct ReservedTx {
     pub max_priority_fee_per_gas: u128,
     pub payload_hash: [u8; 32],
     pub requested_at_ns: u64,
+    /// Block height of the latest `sign` call for this reservation (see `release_stuck`).
+    pub requested_at_block: u64,
     /// Number of MPC `sign` calls made for this reservation (1 = first attempt).
     pub attempts: u32,
 }
@@ -38,6 +40,12 @@ pub struct WalletState {
     pub in_flight: bool,
     pub reserved: Option<ReservedTx>,
     pub minted_at_ns: u64,
+    /// An `nft_transfer_call` is outstanding: the receiver's `nft_on_transfer` may be running
+    /// and the token may still be returned to the previous owner. Everything is frozen.
+    pub transfer_call_pending: bool,
+    /// Trust-on-first-use signer address: set by the first accepted signature. Any later
+    /// signature that recovers to another address is rejected as a failed attempt.
+    pub eth_address: Option<[u8; 20]>,
 }
 
 #[near(serializers = [borsh])]
@@ -74,6 +82,7 @@ pub struct ConfigView {
     pub path_prefix: String,
     pub sign_fee: U128,
     pub mint_fee: U128,
+    pub release_after_blocks: u64,
 }
 
 #[near(serializers = [json])]
@@ -96,6 +105,7 @@ pub struct ReservedTxView {
     pub max_priority_fee_per_gas: U128,
     pub payload_hash_hex: String,
     pub requested_at_ns: U64,
+    pub requested_at_block: u64,
     pub attempts: u32,
 }
 
@@ -107,6 +117,8 @@ pub struct WalletView {
     pub path: String,
     pub next_nonce: u64,
     pub in_flight: bool,
+    pub transfer_call_pending: bool,
+    pub eth_address: Option<String>,
     pub listing: Option<ListingView>,
     pub reserved: Option<ReservedTxView>,
     pub sig_count: u64,
@@ -142,6 +154,7 @@ impl ReservedTx {
             max_priority_fee_per_gas: U128(self.max_priority_fee_per_gas),
             payload_hash_hex: hex0x(&self.payload_hash),
             requested_at_ns: U64(self.requested_at_ns),
+            requested_at_block: self.requested_at_block,
             attempts: self.attempts,
         }
     }

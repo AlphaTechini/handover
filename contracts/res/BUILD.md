@@ -9,8 +9,8 @@ is only expected with the same toolchain and host.
 | Toolchain | rustc 1.97.0 (2d8144b78 2026-07-07), cargo 1.97.0, target `wasm32-unknown-unknown` |
 | near-sdk | 5.30.0 (features `unstable` for `env::ecrecover`), near-contract-standards 5.30.0, omni-transaction 0.5.0 (`evm` only) |
 | Builder | cargo-near 0.22.0 (prebuilt release binary), bundled wasm-opt (`-O`, bulk-memory, nontrapping-float-to-int) |
-| Size | 311477 bytes (304.2 KiB) |
-| SHA-256 | `f000160a40d2380ff5b5abe3f0a4396d409d9e513c1f1a2df8b69a9192863510` |
+| Size | 316931 bytes (309.5 KiB) |
+| SHA-256 | `66deed9e8ad380fac2a7b6bc19b0003ae455e0ffdff6709e36906518dc069eab` |
 | Protocol | near-sdk 5.30 declares `min_protocol_version = 88` (testnet only; if deploy fails with a link error, pin near-sdk 5.29.1) |
 
 Command (run in `contracts/handover`):

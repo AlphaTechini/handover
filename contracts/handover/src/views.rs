@@ -1,7 +1,10 @@
 //! Read-only views.
 
 use crate::types::*;
-use crate::{Handover, HandoverExt, DEFAULT_PAGE, MAX_PAGE, MINT_FEE, PATH_PREFIX, SIGN_FEE};
+use crate::{
+    Handover, HandoverExt, DEFAULT_PAGE, MAX_PAGE, MINT_FEE, PATH_PREFIX, RELEASE_AFTER_BLOCKS,
+    SIGN_FEE,
+};
 use near_sdk::json_types::{U128, U64};
 use near_sdk::near;
 
@@ -18,6 +21,7 @@ impl Handover {
             path_prefix: PATH_PREFIX.to_string(),
             sign_fee: U128(SIGN_FEE.as_yoctonear()),
             mint_fee: U128(MINT_FEE.as_yoctonear()),
+            release_after_blocks: RELEASE_AFTER_BLOCKS,
         }
     }
 
@@ -29,6 +33,8 @@ impl Handover {
             owner_id,
             next_nonce: w.next_nonce,
             in_flight: w.in_flight,
+            transfer_call_pending: w.transfer_call_pending,
+            eth_address: w.eth_address.map(|a| format!("0x{}", hex::encode(a))),
             listing: self.get_listing(token_id.clone()),
             reserved: w.reserved.as_ref().map(|r| r.view()),
             // Nonces are dense, so the number of logged signatures equals next_nonce.

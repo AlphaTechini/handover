@@ -21,6 +21,7 @@ impl Handover {
         let seller = self.require_owner(&token_id);
         require!(price.0 > 0, "Price must be greater than 0");
         require!(!self.is_listed(&token_id), "Already listed");
+        self.assert_no_transfer_call(&token_id);
         let w = self.wallet(&token_id);
         require!(!w.in_flight, "A signature request is in flight");
         require!(
@@ -47,27 +48,34 @@ impl Handover {
         events::delisted(&token_id, &seller);
     }
 
-    /// Buy a listed token. Attach at least the price; the excess is refunded to the buyer.
+    /// Buy a listed token. Attach EXACTLY the price (no refund path) and pass the wallet's
+    /// `next_nonce` as you verified it. If the wallet changed since your clean check (for
+    /// example the seller delisted, signed and relisted) `next_nonce` moved and the call fails.
     ///
     /// Everything happens in this one call (risk 4): the listing is removed, the NFT moves to
     /// the buyer (approvals are cleared by the standard transfer), and the seller is paid
     /// exactly `price`. If any step panics the whole call reverts.
     #[payable]
-    pub fn buy(&mut self, token_id: TokenId) {
+    pub fn buy(&mut self, token_id: TokenId, expected_next_nonce: u64) {
         let buyer = env::predecessor_account_id();
         let deposit = env::attached_deposit();
         let listing = self.listings.get(&token_id).cloned().unwrap_or_else(|| {
             env::panic_str("Token is not listed");
         });
         let price = NearToken::from_yoctonear(listing.price);
-        require!(deposit >= price, "Attached deposit is less than the price");
+        require!(deposit == price, "Attach exactly the listed price");
         require!(
             buyer != listing.seller_id,
             "Seller cannot buy their own listing"
         );
+        self.assert_no_transfer_call(&token_id);
         // Defence in depth: these cannot hold while listed (list() and the transfer guards keep
         // them out), but a sale of a wallet with a pending signature must never go through.
         let w = self.wallet(&token_id);
+        require!(
+            w.next_nonce == expected_next_nonce,
+            "Wallet changed since you checked it"
+        );
         require!(
             !w.in_flight && w.reserved.is_none(),
             "Wallet has a pending signature"
@@ -88,10 +96,6 @@ impl Handover {
         Promise::new(listing.seller_id.clone())
             .transfer(price)
             .detach();
-        let excess = deposit.saturating_sub(price);
-        if excess > NearToken::from_yoctonear(0) {
-            Promise::new(buyer.clone()).transfer(excess).detach();
-        }
         events::sold(&token_id, &listing.seller_id, &buyer, listing.price);
     }
 }

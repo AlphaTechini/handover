@@ -10,7 +10,7 @@ use k256::ecdsa::{RecoveryId, Signature, SigningKey, VerifyingKey};
 use near_sdk::mock::MockAction;
 use near_sdk::serde_json::{self, json, Value};
 use near_sdk::test_utils::{accounts, get_created_receipts, get_logs, VMContextBuilder};
-use near_sdk::{testing_env, Gas, PromiseError};
+use near_sdk::{test_vm_config, testing_env, Gas, PromiseResult, RuntimeFeesConfig};
 
 const MPC: &str = "v1.signer-prod.testnet";
 const SELF_ID: &str = "handover.testnet";
@@ -19,6 +19,8 @@ const DEAD: &str = "0x000000000000000000000000000000000000dead";
 const ONE_NEAR: NearToken = NearToken::from_near(1);
 const Y1: NearToken = NearToken::from_yoctonear(1);
 const GWEI: u128 = 1_000_000_000;
+/// Smallest valid sign deposit: SIGN_FEE kept + 1 yocto forwarded to MPC.
+const FEE_OK: NearToken = NearToken::from_yoctonear(SIGN_FEE.as_yoctonear() + 1);
 
 fn alice() -> AccountId {
     accounts(0)
@@ -55,7 +57,7 @@ fn mint(c: &mut Handover, who: &AccountId) -> String {
 }
 
 fn request(c: &mut Handover, who: &AccountId, token: &str) {
-    request_with(c, who, token, DEAD, 100, 21_000, 30 * GWEI, GWEI, SIGN_FEE);
+    request_with(c, who, token, DEAD, 100, 21_000, 30 * GWEI, GWEI, FEE_OK);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -82,8 +84,30 @@ fn request_with(
     .detach();
 }
 
-fn as_self() {
-    testing_env!(ctx(&SELF_ID.parse().unwrap(), NearToken::from_yoctonear(0)).build());
+/// Run as the contract itself (callback context) with the given single promise result.
+fn as_self_with(result: PromiseResult) {
+    testing_env!(
+        ctx(&SELF_ID.parse().unwrap(), NearToken::from_yoctonear(0)).build(),
+        test_vm_config(),
+        RuntimeFeesConfig::test(),
+        Default::default(),
+        vec![result]
+    );
+}
+
+fn ok_result(resp: &SignatureResponse) -> PromiseResult {
+    PromiseResult::Successful(serde_json::to_vec(resp).unwrap())
+}
+
+/// Invoke the callback as the contract with `result` as the MPC promise result.
+fn call_on_signed(
+    c: &mut Handover,
+    token: &str,
+    nonce: u64,
+    result: PromiseResult,
+) -> Option<SignedTxView> {
+    as_self_with(result);
+    c.on_signed(token.to_string(), nonce)
 }
 
 fn wallet(c: &Handover, token: &str) -> WalletState {
@@ -102,9 +126,20 @@ fn test_key() -> SigningKey {
     SigningKey::from_bytes(&scalar.into()).unwrap()
 }
 
+/// A second throwaway key (scalar 2), standing in for "a different MPC key".
+fn other_key() -> SigningKey {
+    let mut scalar = [0u8; 32];
+    scalar[31] = 2;
+    SigningKey::from_bytes(&scalar.into()).unwrap()
+}
+
 /// Sign `hash` like the MPC network would and return the response JSON shape.
 fn mpc_response(hash: &[u8; 32]) -> (SignatureResponse, [u8; 32], [u8; 32]) {
-    let (sig, recid) = test_key().sign_prehash_recoverable(hash).unwrap();
+    mpc_response_with(&test_key(), hash)
+}
+
+fn mpc_response_with(key: &SigningKey, hash: &[u8; 32]) -> (SignatureResponse, [u8; 32], [u8; 32]) {
+    let (sig, recid) = key.sign_prehash_recoverable(hash).unwrap();
     assert!(sig.normalize_s().is_none(), "k256 must return low-s");
     assert!(!recid.is_x_reduced());
     let bytes = sig.to_bytes();
@@ -123,20 +158,24 @@ fn mpc_response(hash: &[u8; 32]) -> (SignatureResponse, [u8; 32], [u8; 32]) {
     (serde_json::from_value(json).unwrap(), r, s)
 }
 
+/// Like `set` but at a given block height.
+fn set_block(pred: &AccountId, deposit: NearToken, height: u64) {
+    let mut b = ctx(pred, deposit);
+    b.block_height(height);
+    testing_env!(b.build());
+}
+
 /// Run the callback with a valid MPC-shaped response for the currently reserved payload.
 fn complete_ok(c: &mut Handover, token: &str) -> SignedTxView {
     let w = wallet(c, token);
     let nonce = w.reserved.as_ref().unwrap().nonce;
     let (resp, _, _) = mpc_response(&reserved_hash(c, token));
-    as_self();
-    c.on_signed(token.to_string(), nonce, Ok(resp))
-        .expect("signed")
+    call_on_signed(c, token, nonce, ok_result(&resp)).expect("signed")
 }
 
 fn complete_err(c: &mut Handover, token: &str) -> Option<SignedTxView> {
     let nonce = wallet(c, token).reserved.as_ref().unwrap().nonce;
-    as_self();
-    c.on_signed(token.to_string(), nonce, Err(PromiseError::Failed))
+    call_on_signed(c, token, nonce, PromiseResult::Failed)
 }
 
 fn raw_bytes(v: &SignedTxView) -> Vec<u8> {
@@ -252,7 +291,7 @@ fn mint_refunds_excess_beyond_measured_storage() {
 fn request_transfer_calls_mpc_with_exact_args_and_one_yocto() {
     let mut c = new_contract();
     mint(&mut c, &alice());
-    // Attach more than SIGN_FEE to also exercise the refund.
+    // Attach more than SIGN_FEE: the contract keeps SIGN_FEE and forwards the REST to MPC.
     request_with(
         &mut c,
         &alice(),
@@ -282,7 +321,11 @@ fn request_transfer_calls_mpc_with_exact_args_and_one_yocto() {
         panic!("not a function call")
     };
     assert_eq!(method_name, b"sign");
-    assert_eq!(*attached_deposit, Y1, "exactly 1 yocto to MPC");
+    assert_eq!(
+        attached_deposit.as_yoctonear(),
+        NearToken::from_millinear(250).as_yoctonear() - SIGN_FEE.as_yoctonear(),
+        "deposit - SIGN_FEE goes to MPC"
+    );
     assert_eq!(*prepaid_gas, SIGN_GAS);
     assert_eq!(gas_weight.0, 1);
     let expected_tx = tx::build_plain_transfer(
@@ -323,18 +366,11 @@ fn request_transfer_calls_mpc_with_exact_args_and_one_yocto() {
         json!({"token_id": "0", "nonce": 0})
     );
 
-    // refund of everything above SIGN_FEE goes to the caller
-    let refund = receipts
+    // no refund receipt: only the MPC call and the callback exist
+    assert_eq!(receipts.len(), 2);
+    assert!(receipts
         .iter()
-        .find_map(|r| match (&r.receiver_id, &r.actions[0]) {
-            (id, MockAction::Transfer { deposit, .. }) if *id == alice() => Some(*deposit),
-            _ => None,
-        })
-        .expect("refund");
-    assert_eq!(
-        refund.as_yoctonear(),
-        NearToken::from_millinear(240).as_yoctonear()
-    );
+        .all(|r| !matches!(r.actions[0], MockAction::Transfer { .. })));
 
     // state
     let w = wallet(&c, "0");
@@ -403,7 +439,7 @@ fn request_transfer_requires_sign_fee() {
 fn request_transfer_requires_enough_gas() {
     let mut c = new_contract();
     mint(&mut c, &alice());
-    let mut b = ctx(&alice(), SIGN_FEE);
+    let mut b = ctx(&alice(), FEE_OK);
     b.prepaid_gas(Gas::from_tgas(60));
     testing_env!(b.build());
     c.request_transfer(
@@ -420,12 +456,12 @@ fn request_transfer_requires_enough_gas() {
 #[test]
 fn transfer_parameter_validation() {
     let ok = |to: &str, v, g, mf, mp| tx::validate_transfer(to, v, g, mf, mp);
-    assert!(ok(DEAD, 1, 21_000, 2, 1).is_ok());
-    assert!(ok(DEAD, 1, 100_000, 2, 2).is_ok());
+    assert!(ok(DEAD, 1, 21_000, GWEI, 1).is_ok());
+    assert!(ok(DEAD, 1, 21_000, GWEI, GWEI).is_ok());
     // mixed/upper case hex accepted
     let mixed = "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01";
     assert_eq!(
-        hex::encode(ok(mixed, 1, 21_000, 2, 1).unwrap().to),
+        hex::encode(ok(mixed, 1, 21_000, GWEI, 1).unwrap().to),
         mixed[2..].to_lowercase()
     );
     // addresses
@@ -441,14 +477,33 @@ fn transfer_parameter_validation() {
         "0x 00000000000000000000000000000000000dead",
         "vitalik.eth",
     ] {
-        assert!(ok(bad, 1, 21_000, 2, 1).is_err(), "should reject {bad:?}");
+        assert!(
+            ok(bad, 1, 21_000, GWEI, 1).is_err(),
+            "should reject {bad:?}"
+        );
     }
-    assert!(ok(DEAD, 0, 21_000, 2, 1).is_err(), "zero value");
-    assert!(ok(DEAD, 1, 20_999, 2, 1).is_err(), "gas below 21000");
-    assert!(ok(DEAD, 1, 100_001, 2, 1).is_err(), "gas above 100000");
+    assert!(ok(DEAD, 0, 21_000, GWEI, 1).is_err(), "zero value");
+    assert!(ok(DEAD, 1, 20_999, GWEI, 1).is_err(), "gas below 21000");
+    assert!(ok(DEAD, 1, 21_001, GWEI, 1).is_err(), "gas above 21000");
+    assert!(ok(DEAD, 1, 100_000, GWEI, 1).is_err(), "gas far above");
     assert!(ok(DEAD, 1, 21_000, 0, 0).is_err(), "zero fees");
-    assert!(ok(DEAD, 1, 21_000, 2, 0).is_err(), "zero priority fee");
-    assert!(ok(DEAD, 1, 21_000, 1, 2).is_err(), "priority > max fee");
+    assert!(ok(DEAD, 1, 21_000, GWEI, 0).is_err(), "zero priority fee");
+    assert!(
+        ok(DEAD, 1, 21_000, GWEI - 1, 1).is_err(),
+        "max fee < 1 gwei"
+    );
+    assert!(ok(DEAD, 1, 21_000, GWEI, GWEI + 1).is_err(), "prio > max");
+    assert!(
+        ok(
+            "0x0000000000000000000000000000000000000000",
+            1,
+            21_000,
+            GWEI,
+            1
+        )
+        .is_err(),
+        "zero address"
+    );
 }
 
 #[test]
@@ -456,7 +511,7 @@ fn transfer_parameter_validation() {
 fn contract_rejects_zero_value() {
     let mut c = new_contract();
     mint(&mut c, &alice());
-    request_with(&mut c, &alice(), "0", DEAD, 0, 21_000, GWEI, GWEI, SIGN_FEE);
+    request_with(&mut c, &alice(), "0", DEAD, 0, 21_000, GWEI, GWEI, FEE_OK);
 }
 
 #[test]
@@ -473,7 +528,7 @@ fn contract_rejects_bad_address() {
         21_000,
         GWEI,
         GWEI,
-        SIGN_FEE,
+        FEE_OK,
     );
 }
 
@@ -492,7 +547,7 @@ fn no_retry_while_in_flight() {
     let mut c = new_contract();
     mint(&mut c, &alice());
     request(&mut c, &alice(), "0");
-    set(&alice(), SIGN_FEE);
+    set(&alice(), FEE_OK);
     c.retry_reserved("0".into()).detach();
 }
 
@@ -601,12 +656,11 @@ fn leading_zero_case(want_r: bool) {
         21_000,
         30 * GWEI,
         GWEI,
-        SIGN_FEE,
+        FEE_OK,
     );
     let (resp, r, s) = mpc_response(&reserved_hash(&c, "0"));
     assert!(if want_r { r[0] == 0 } else { s[0] == 0 });
-    as_self();
-    let view = c.on_signed("0".into(), 0, Ok(resp)).expect("signed");
+    let view = call_on_signed(&mut c, "0", 0, ok_result(&resp)).expect("signed");
     let (items, signer) = decode_signed(&raw_bytes(&view));
     assert_eq!(signer, TEST_KEY_ADDRESS);
     let (r_item, s_item) = (&items[10], &items[11]);
@@ -673,7 +727,7 @@ fn matches_independent_viem_vector() {
 
 #[test]
 fn only_plain_transfers_can_be_built() {
-    let p = tx::validate_transfer(DEAD, 1, 21_000, 2, 1).unwrap();
+    let p = tx::validate_transfer(DEAD, 1, 21_000, 2 * GWEI, GWEI).unwrap();
     let t = tx::build_plain_transfer(SEPOLIA_CHAIN_ID, 7, &p);
     assert!(tx::is_plain_transfer(&t));
     assert!(t.input.is_empty() && t.access_list.is_empty());
@@ -698,9 +752,9 @@ fn callback_gas_is_well_within_budget() {
     mint(&mut c, &alice());
     request(&mut c, &alice(), "0");
     let (resp, _, _) = mpc_response(&reserved_hash(&c, "0"));
-    as_self();
+    as_self_with(ok_result(&resp));
     let before = env::used_gas();
-    c.on_signed("0".into(), 0, Ok(resp)).unwrap();
+    c.on_signed("0".into(), 0).unwrap();
     let used = env::used_gas().as_gas() - before.as_gas();
     // Host-function costs only (wasm instruction gas is not metered in unit tests), so this is a
     // lower bound; the real number is a few Tgas. The static allocation must dwarf it.
@@ -737,7 +791,17 @@ fn new_request_rejected_while_reserved_even_with_different_args() {
     mint(&mut c, &alice());
     request(&mut c, &alice(), "0");
     complete_err(&mut c, "0");
-    request_with(&mut c, &alice(), "0", DEAD, 1, 21_000, 2, 1, SIGN_FEE);
+    request_with(
+        &mut c,
+        &alice(),
+        "0",
+        DEAD,
+        1,
+        21_000,
+        2 * GWEI,
+        GWEI,
+        FEE_OK,
+    );
 }
 
 #[test]
@@ -763,7 +827,10 @@ fn retry_reserved_resigns_identical_payload_then_nonce_advances() {
     else {
         panic!()
     };
-    assert_eq!(*attached_deposit, Y1);
+    assert_eq!(
+        attached_deposit.as_yoctonear(),
+        NearToken::from_millinear(20).as_yoctonear()
+    );
     let v: Value = serde_json::from_slice(args).unwrap();
     assert_eq!(
         v["request"]["payload_v2"]["Ecdsa"],
@@ -775,8 +842,9 @@ fn retry_reserved_resigns_identical_payload_then_nonce_advances() {
     assert!(w.in_flight);
     assert_eq!(w.reserved.as_ref().unwrap().attempts, 2);
     assert_eq!(w.next_nonce, 0);
-    // excess over SIGN_FEE refunded
-    assert!(receipts.iter().any(|r| matches!(r.actions[0], MockAction::Transfer { deposit, .. } if deposit.as_millinear() == 20)));
+    assert!(receipts
+        .iter()
+        .all(|r| !matches!(r.actions[0], MockAction::Transfer { .. })));
 
     let v = complete_ok(&mut c, "0");
     assert_eq!(v.nonce, 0);
@@ -792,7 +860,7 @@ fn retry_reserved_resigns_identical_payload_then_nonce_advances() {
 fn retry_reserved_requires_a_reservation() {
     let mut c = new_contract();
     mint(&mut c, &alice());
-    set(&alice(), SIGN_FEE);
+    set(&alice(), FEE_OK);
     c.retry_reserved("0".into()).detach();
 }
 
@@ -803,7 +871,7 @@ fn retry_reserved_owner_only() {
     mint(&mut c, &alice());
     request(&mut c, &alice(), "0");
     complete_err(&mut c, "0");
-    set(&bob(), SIGN_FEE);
+    set(&bob(), FEE_OK);
     c.retry_reserved("0".into()).detach();
 }
 
@@ -873,8 +941,7 @@ fn on_signed_never_panics_on_bad_responses_and_keeps_reservation() {
     }
 
     for (i, case) in cases.into_iter().enumerate() {
-        as_self();
-        let out = c.on_signed("0".into(), 0, Ok(case));
+        let out = call_on_signed(&mut c, "0", 0, ok_result(&case));
         assert!(out.is_none(), "case {i} must be rejected");
         let w = wallet(&c, "0");
         assert!(!w.in_flight, "case {i}");
@@ -885,8 +952,7 @@ fn on_signed_never_panics_on_bad_responses_and_keeps_reservation() {
     }
     assert!(c.get_sig_log("0".into(), None, None).is_empty());
     // and the good one still works afterwards
-    as_self();
-    assert!(c.on_signed("0".into(), 0, Ok(good)).is_some());
+    assert!(call_on_signed(&mut c, "0", 0, ok_result(&good)).is_some());
 }
 
 #[test]
@@ -894,19 +960,15 @@ fn on_signed_ignores_stale_or_unknown_callbacks_without_panicking() {
     let mut c = new_contract();
     mint(&mut c, &alice());
     // unknown token
-    as_self();
-    assert!(c
-        .on_signed("42".into(), 0, Err(PromiseError::Failed))
-        .is_none());
+    assert!(call_on_signed(&mut c, "42", 0, PromiseResult::Failed).is_none());
     // nothing reserved / not in flight
     let (resp, _, _) = mpc_response(&[1u8; 32]);
-    assert!(c.on_signed("0".into(), 0, Ok(resp.clone())).is_none());
+    assert!(call_on_signed(&mut c, "0", 0, ok_result(&resp)).is_none());
     assert_eq!(wallet(&c, "0").next_nonce, 0);
     // wrong nonce for an in-flight reservation
     request(&mut c, &alice(), "0");
     let (resp, _, _) = mpc_response(&reserved_hash(&c, "0"));
-    as_self();
-    assert!(c.on_signed("0".into(), 5, Ok(resp)).is_none());
+    assert!(call_on_signed(&mut c, "0", 5, ok_result(&resp)).is_none());
     assert_eq!(wallet(&c, "0").next_nonce, 0);
     assert!(wallet(&c, "0").reserved.is_some());
 }
@@ -922,8 +984,9 @@ fn on_signed_rejects_non_contract_predecessor() {
     mint(&mut c, &alice());
     request(&mut c, &alice(), "0");
     let (resp, _, _) = mpc_response(&reserved_hash(&c, "0"));
+    let _ = resp;
     set(&alice(), NearToken::from_yoctonear(0));
-    c.on_signed("0".into(), 0, Ok(resp));
+    c.on_signed("0".into(), 0);
 }
 
 // ----------------------------------------------------------------------- list / delist
@@ -1049,9 +1112,10 @@ fn retry_reserved_rejected_while_listed() {
         max_priority_fee_per_gas: 1,
         payload_hash: [0; 32],
         requested_at_ns: 0,
+        requested_at_block: 0,
         attempts: 1,
     });
-    set(&alice(), SIGN_FEE);
+    set(&alice(), FEE_OK);
     c.retry_reserved("0".into()).detach();
 }
 
@@ -1216,36 +1280,31 @@ fn approved_account_cannot_transfer_listed_token() {
 
 const PRICE: u128 = 5 * 1_000_000_000_000_000_000_000_000;
 
+fn buy_exact(c: &mut Handover, who: &AccountId, token: &str, nonce: u64) {
+    set(who, NearToken::from_yoctonear(PRICE));
+    c.buy(token.into(), nonce);
+}
+
+fn paid_to(receipts: &[near_sdk::mock::Receipt], who: &AccountId) -> Option<u128> {
+    receipts
+        .iter()
+        .find_map(|r| match (&r.receiver_id, &r.actions[0]) {
+            (id, MockAction::Transfer { deposit, .. }) if id == who => Some(deposit.as_yoctonear()),
+            _ => None,
+        })
+}
+
 #[test]
-fn buy_moves_nft_pays_seller_exactly_and_refunds_excess() {
+fn buy_moves_nft_pays_seller_exactly_and_creates_no_other_receipt() {
     let mut c = listed_contract();
-    set(
-        &bob(),
-        NearToken::from_yoctonear(PRICE + 7 * 10u128.pow(23)),
-    );
-    c.buy("0".into());
+    buy_exact(&mut c, &bob(), "0", 0);
     let receipts = get_created_receipts();
-    let paid = |who: &AccountId| {
-        receipts
-            .iter()
-            .find_map(|r| match (&r.receiver_id, &r.actions[0]) {
-                (id, MockAction::Transfer { deposit, .. }) if id == who => {
-                    Some(deposit.as_yoctonear())
-                }
-                _ => None,
-            })
-    };
     assert_eq!(
-        paid(&alice()),
+        paid_to(&receipts, &alice()),
         Some(PRICE),
         "seller is paid exactly the price"
     );
-    assert_eq!(
-        paid(&bob()),
-        Some(7 * 10u128.pow(23)),
-        "excess refunded to buyer"
-    );
-    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts.len(), 1, "no refund receipt exists");
 
     assert_eq!(c.nft_token("0".into()).unwrap().owner_id, bob());
     assert_eq!(c.get_wallet("0".into()).unwrap().owner_id, bob());
@@ -1265,28 +1324,67 @@ fn buy_moves_nft_pays_seller_exactly_and_refunds_excess() {
 }
 
 #[test]
-fn buy_with_exact_price_has_no_refund_receipt() {
-    let mut c = listed_contract();
-    set(&bob(), NearToken::from_yoctonear(PRICE));
-    c.buy("0".into());
-    assert_eq!(get_created_receipts().len(), 1);
-}
-
-#[test]
 #[should_panic(expected = "Only the token owner")]
 fn old_owner_refused_after_buy() {
     let mut c = listed_contract();
-    set(&bob(), NearToken::from_yoctonear(PRICE));
-    c.buy("0".into());
+    buy_exact(&mut c, &bob(), "0", 0);
     request(&mut c, &alice(), "0");
 }
 
 #[test]
-#[should_panic(expected = "less than the price")]
+#[should_panic(expected = "Attach exactly the listed price")]
 fn buy_rejects_underpayment() {
     let mut c = listed_contract();
     set(&bob(), NearToken::from_yoctonear(PRICE - 1));
-    c.buy("0".into());
+    c.buy("0".into(), 0);
+}
+
+#[test]
+#[should_panic(expected = "Attach exactly the listed price")]
+fn buy_rejects_overpayment() {
+    let mut c = listed_contract();
+    set(&bob(), NearToken::from_yoctonear(PRICE + 1));
+    c.buy("0".into(), 0);
+}
+
+#[test]
+#[should_panic(expected = "Wallet changed since you checked it")]
+fn buy_rejects_wrong_expected_nonce() {
+    let mut c = listed_contract();
+    buy_exact(&mut c, &bob(), "0", 1);
+}
+
+#[test]
+#[should_panic(expected = "Wallet changed since you checked it")]
+fn buy_rejected_when_wallet_changed_after_check() {
+    // Inverted reviewer exploit: the seller delists, signs a drain tx and relists at the same
+    // price after the buyer's clean check (next_nonce == 0). The buy bound to nonce 0 fails.
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    set(&alice(), Y1);
+    c.list("0".into(), U128(PRICE));
+    let checked_nonce = wallet(&c, "0").next_nonce;
+    assert_eq!(checked_nonce, 0);
+    set(&alice(), Y1);
+    c.delist("0".into());
+    request(&mut c, &alice(), "0");
+    let drained = complete_ok(&mut c, "0");
+    assert_eq!(drained.nonce, 0);
+    set(&alice(), Y1);
+    c.list("0".into(), U128(PRICE));
+    buy_exact(&mut c, &bob(), "0", checked_nonce);
+}
+
+#[test]
+fn buy_after_delist_sign_relist_succeeds_with_fresh_nonce() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request(&mut c, &alice(), "0");
+    complete_ok(&mut c, "0");
+    set(&alice(), Y1);
+    c.list("0".into(), U128(PRICE));
+    buy_exact(&mut c, &bob(), "0", 1);
+    assert_eq!(c.owner_of("0").unwrap(), bob());
 }
 
 #[test]
@@ -1295,15 +1393,14 @@ fn buy_rejects_unlisted_token() {
     let mut c = new_contract();
     mint(&mut c, &alice());
     set(&bob(), ONE_NEAR);
-    c.buy("0".into());
+    c.buy("0".into(), 0);
 }
 
 #[test]
 #[should_panic(expected = "Seller cannot buy")]
 fn seller_cannot_buy_own_listing() {
     let mut c = listed_contract();
-    set(&alice(), NearToken::from_yoctonear(PRICE));
-    c.buy("0".into());
+    buy_exact(&mut c, &alice(), "0", 0);
 }
 
 #[test]
@@ -1313,8 +1410,7 @@ fn buy_rejected_while_in_flight_or_reserved() {
     // signing); forced here to prove the guard inside buy() independently.
     let mut c = listed_contract();
     c.wallets.get_mut("0").unwrap().in_flight = true;
-    set(&bob(), NearToken::from_yoctonear(PRICE));
-    c.buy("0".into());
+    buy_exact(&mut c, &bob(), "0", 0);
 }
 
 #[test]
@@ -1326,8 +1422,7 @@ fn buy_clears_approvals() {
     assert!(c.nft_is_approved("0".into(), carol(), None));
     set(&alice(), Y1);
     c.list("0".into(), U128(PRICE));
-    set(&bob(), NearToken::from_yoctonear(PRICE));
-    c.buy("0".into());
+    buy_exact(&mut c, &bob(), "0", 0);
     assert!(
         !c.nft_is_approved("0".into(), carol(), None),
         "old approvals do not survive a sale"
@@ -1342,8 +1437,7 @@ fn buyer_signs_after_sale_and_log_continues_from_seller_nonce() {
     complete_ok(&mut c, "0");
     set(&alice(), Y1);
     c.list("0".into(), U128(PRICE));
-    set(&bob(), NearToken::from_yoctonear(PRICE));
-    c.buy("0".into());
+    buy_exact(&mut c, &bob(), "0", 1);
     request(&mut c, &bob(), "0");
     let v = complete_ok(&mut c, "0");
     assert_eq!(v.nonce, 1, "nonces continue across owners");
@@ -1408,6 +1502,514 @@ fn sig_log_limit_is_capped_at_100() {
         "max 100"
     );
     assert_eq!(c.get_sig_log("0".into(), Some(100), Some(1000)).len(), 20);
+}
+
+// ============================================================ security fixes v2 (F0-F8)
+
+fn failed_logs() -> usize {
+    get_logs()
+        .iter()
+        .filter(|l| l.contains(r#""event":"sign_failed""#))
+        .count()
+}
+
+// ------------------------------------------------------------------------------------ F0
+
+#[test]
+#[should_panic(expected = "private")]
+fn new_rejects_non_contract_predecessor() {
+    set(&alice(), NearToken::from_yoctonear(0));
+    Handover::new(MPC.parse().unwrap(), SEPOLIA_CHAIN_ID);
+}
+
+// ------------------------------------------------------------------------------------ F2
+
+#[test]
+fn on_signed_records_failure_for_unexpected_promise_results() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request(&mut c, &alice(), "0");
+    let results: Vec<(&str, PromiseResult)> = vec![
+        (
+            "valid JSON, other shape",
+            PromiseResult::Successful(br#"{"unexpected":true,"n":[1,2,3]}"#.to_vec()),
+        ),
+        (
+            "valid JSON, right tag wrong fields",
+            PromiseResult::Successful(br#"{"scheme":"Secp256k1","big_r":1}"#.to_vec()),
+        ),
+        ("json null", PromiseResult::Successful(b"null".to_vec())),
+        (
+            "garbage bytes",
+            PromiseResult::Successful(vec![0xff, 0xfe, 0x00, 0x80, 0x12]),
+        ),
+        ("empty bytes", PromiseResult::Successful(vec![])),
+        (
+            "oversized result",
+            PromiseResult::Successful(vec![b' '; 10_000]),
+        ),
+        ("failed promise", PromiseResult::Failed),
+    ];
+    let hash = reserved_hash(&c, "0");
+    for (name, result) in results {
+        let out = call_on_signed(&mut c, "0", 0, result);
+        assert!(out.is_none(), "{name}");
+        let w = wallet(&c, "0");
+        assert!(!w.in_flight, "{name}: in_flight cleared");
+        assert_eq!(w.reserved.as_ref().unwrap().payload_hash, hash, "{name}");
+        assert_eq!(w.next_nonce, 0, "{name}");
+        assert_eq!(failed_logs(), 1, "{name}: sign_failed recorded");
+        c.wallets.get_mut("0").unwrap().in_flight = true;
+    }
+    // zero promise results at all
+    testing_env!(
+        ctx(&SELF_ID.parse().unwrap(), NearToken::from_yoctonear(0)).build(),
+        test_vm_config(),
+        RuntimeFeesConfig::test(),
+        Default::default(),
+        vec![]
+    );
+    assert!(c.on_signed("0".into(), 0).is_none());
+    assert!(!wallet(&c, "0").in_flight);
+    assert_eq!(failed_logs(), 1);
+}
+
+// ------------------------------------------------------------------------------------ F3
+
+const BUFFER_COST: u128 = TOKEN_STORAGE_BUFFER_BYTES as u128 * 10u128.pow(19);
+
+#[test]
+fn mint_keeps_measured_cost_plus_token_buffer() {
+    assert_eq!(
+        env::storage_byte_cost().as_yoctonear() * TOKEN_STORAGE_BUFFER_BYTES as u128,
+        15 * 10u128.pow(21),
+        "buffer is 0.015 NEAR"
+    );
+    let mut c = new_contract();
+    set(&alice(), ONE_NEAR);
+    let before = env::storage_usage();
+    c.nft_mint();
+    let measured = (env::storage_usage() - before) as u128 * 10u128.pow(19);
+    let refund = paid_to(&get_created_receipts(), &alice()).expect("refund receipt");
+    let kept = ONE_NEAR.as_yoctonear() - refund;
+    assert!(
+        kept >= measured + BUFFER_COST,
+        "kept {kept} must cover measured {measured} + buffer {BUFFER_COST}"
+    );
+    assert!(kept <= MINT_FEE.as_yoctonear(), "never more than MINT_FEE");
+    // With the minimum deposit the mint still works: buffer fits inside MINT_FEE.
+    set(&bob(), MINT_FEE);
+    c.nft_mint();
+}
+
+#[test]
+fn listing_reservation_and_transfer_to_fresh_account_fit_in_buffer() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    let fresh: AccountId = "a".repeat(64).parse().unwrap();
+
+    set(&alice(), Y1);
+    let b0 = env::storage_usage();
+    c.list("0".into(), U128(PRICE));
+    c.listings.flush();
+    let listing_bytes = env::storage_usage() - b0;
+
+    set(&alice(), Y1);
+    c.delist("0".into());
+    c.listings.flush();
+
+    set(&alice(), Y1);
+    let b1 = env::storage_usage();
+    c.nft_transfer(fresh.clone(), "0".into(), None, None);
+    c.wallets.flush();
+    let transfer_bytes = env::storage_usage() - b1;
+
+    // (`request` resets the mocked env, so set it first and measure the direct call.)
+    set(&fresh, FEE_OK);
+    let b2 = env::storage_usage();
+    c.request_transfer(
+        "0".into(),
+        DEAD.into(),
+        U128(100),
+        U128(21_000),
+        U128(30 * GWEI),
+        U128(GWEI),
+    )
+    .detach();
+    c.wallets.flush();
+    let reserve_bytes = env::storage_usage() - b2;
+
+    // pinned address written by the first successful signature (sig log entry excluded: it is
+    // paid by SIGN_FEE)
+    let pin_bytes = 1 + 20;
+    let total = listing_bytes + transfer_bytes + reserve_bytes + pin_bytes;
+    println!(
+        "listing {listing_bytes} transfer {transfer_bytes} reserve {reserve_bytes} total {total}"
+    );
+    assert!(
+        total < TOKEN_STORAGE_BUFFER_BYTES,
+        "bounded per-token state ({total} B) must fit the prepaid buffer"
+    );
+}
+
+// ------------------------------------------------------------------------------------ F4
+
+#[test]
+fn release_stuck_only_after_timeout_and_keeps_reservation() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    set_block(&alice(), FEE_OK, 1_000);
+    c.request_transfer(
+        "0".into(),
+        DEAD.into(),
+        U128(100),
+        U128(21_000),
+        U128(30 * GWEI),
+        U128(GWEI),
+    )
+    .detach();
+    let hash = reserved_hash(&c, "0");
+    assert_eq!(
+        c.get_wallet("0".into())
+            .unwrap()
+            .reserved
+            .unwrap()
+            .requested_at_block,
+        1_000
+    );
+    assert_eq!(c.get_config().release_after_blocks, 300);
+
+    // exactly at the boundary is still too early
+    set_block(&alice(), Y1, 1_300);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.release_stuck("0".into())));
+    assert!(r.is_err(), "block 1300 is not > 1000 + 300");
+    assert!(wallet(&c, "0").in_flight);
+
+    set_block(&alice(), Y1, 1_301);
+    c.release_stuck("0".into());
+    let w = wallet(&c, "0");
+    assert!(!w.in_flight);
+    assert_eq!(w.next_nonce, 0);
+    assert_eq!(w.reserved.as_ref().unwrap().payload_hash, hash);
+    assert!(get_logs()
+        .iter()
+        .any(|l| l.contains(r#""event":"released""#)));
+
+    // retry re-signs the identical payload
+    set_block(&alice(), FEE_OK, 1_302);
+    c.retry_reserved("0".into()).detach();
+    let receipts = get_created_receipts();
+    let sign = receipts
+        .iter()
+        .find(|r| r.receiver_id.as_str() == MPC)
+        .unwrap();
+    let MockAction::FunctionCallWeight { args, .. } = &sign.actions[0] else {
+        panic!()
+    };
+    let v: Value = serde_json::from_slice(args).unwrap();
+    assert_eq!(v["request"]["payload_v2"]["Ecdsa"], hex::encode(hash));
+    assert_eq!(
+        wallet(&c, "0").reserved.unwrap().requested_at_block,
+        1_302,
+        "latest attempt block is tracked"
+    );
+    let view = complete_ok(&mut c, "0");
+    assert_eq!(view.nonce, 0);
+    assert_eq!(view.value_wei.0, 100);
+}
+
+#[test]
+#[should_panic(expected = "Too early")]
+fn release_stuck_rejected_before_timeout() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request(&mut c, &alice(), "0");
+    set_block(&alice(), Y1, 200);
+    c.release_stuck("0".into());
+}
+
+#[test]
+#[should_panic(expected = "Only the token owner")]
+fn release_stuck_owner_only() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request(&mut c, &alice(), "0");
+    set_block(&bob(), Y1, 10_000);
+    c.release_stuck("0".into());
+}
+
+#[test]
+#[should_panic(expected = "Nothing is in flight")]
+fn release_stuck_rejected_when_not_in_flight() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request(&mut c, &alice(), "0");
+    complete_err(&mut c, "0");
+    set_block(&alice(), Y1, 10_000);
+    c.release_stuck("0".into());
+}
+
+#[test]
+#[should_panic(expected = "Requires attached deposit of exactly 1 yoctoNEAR")]
+fn release_stuck_requires_one_yocto() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request(&mut c, &alice(), "0");
+    set_block(&alice(), NearToken::from_yoctonear(0), 10_000);
+    c.release_stuck("0".into());
+}
+
+// ------------------------------------------------------------------------------------ F5
+
+fn pending_call() -> (Handover, AccountId) {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    let m: AccountId = "evil.testnet".parse().unwrap();
+    set(&alice(), Y1);
+    let _ = c.nft_transfer_call(m.clone(), "0".into(), None, None, "x".into());
+    (c, m)
+}
+
+fn resolve(c: &mut Handover, m: &AccountId, result: PromiseResult) -> bool {
+    as_self_with(result);
+    c.nft_resolve_transfer(alice(), m.clone(), "0".into(), None)
+}
+
+#[test]
+fn transfer_call_sets_and_exposes_pending_flag() {
+    let (c, _) = pending_call();
+    assert!(wallet(&c, "0").transfer_call_pending);
+    assert!(c.get_wallet("0".into()).unwrap().transfer_call_pending);
+}
+
+#[test]
+#[should_panic(expected = "pending transfer call")]
+fn transfer_call_receiver_cannot_sign_during_call() {
+    // Inverted reviewer exploit: while nft_on_transfer runs, the receiver owns the token and
+    // used to be able to reserve a tx that survived the token returning to the seller.
+    let (mut c, m) = pending_call();
+    request(&mut c, &m, "0");
+}
+
+#[test]
+#[should_panic(expected = "pending transfer call")]
+fn pending_call_blocks_retry_reserved() {
+    let (mut c, m) = pending_call();
+    c.wallets.get_mut("0").unwrap().reserved = Some(ReservedTx {
+        nonce: 0,
+        to: [1; 20],
+        value_wei: 1,
+        gas_limit: 21_000,
+        max_fee_per_gas: GWEI,
+        max_priority_fee_per_gas: 1,
+        payload_hash: [0; 32],
+        requested_at_ns: 0,
+        requested_at_block: 0,
+        attempts: 1,
+    });
+    set(&m, FEE_OK);
+    c.retry_reserved("0".into()).detach();
+}
+
+#[test]
+#[should_panic(expected = "pending transfer call")]
+fn pending_call_blocks_list() {
+    let (mut c, m) = pending_call();
+    set(&m, Y1);
+    c.list("0".into(), U128(1));
+}
+
+#[test]
+#[should_panic(expected = "pending transfer call")]
+fn pending_call_blocks_nft_transfer() {
+    let (mut c, m) = pending_call();
+    set(&m, Y1);
+    c.nft_transfer(carol(), "0".into(), None, None);
+}
+
+#[test]
+#[should_panic(expected = "pending transfer call")]
+fn pending_call_blocks_nft_transfer_call() {
+    let (mut c, m) = pending_call();
+    set(&m, Y1);
+    let _ = c.nft_transfer_call(carol(), "0".into(), None, None, "".into());
+}
+
+#[test]
+#[should_panic(expected = "pending transfer call")]
+fn pending_call_blocks_buy() {
+    let (mut c, m) = pending_call();
+    // force a listing (impossible through the public API) to prove buy's own guard
+    c.listings.insert(
+        "0".to_string(),
+        Listing {
+            seller_id: m.clone(),
+            price: PRICE,
+            listed_at_ns: 0,
+        },
+    );
+    buy_exact(&mut c, &bob(), "0", 0);
+}
+
+#[test]
+fn resolver_clears_pending_flag_when_receiver_asks_for_return() {
+    let (mut c, m) = pending_call();
+    assert!(!resolve(
+        &mut c,
+        &m,
+        PromiseResult::Successful(b"true".to_vec())
+    ));
+    assert!(!wallet(&c, "0").transfer_call_pending);
+    assert_eq!(c.owner_of("0").unwrap(), alice());
+    request(&mut c, &alice(), "0");
+    assert!(wallet(&c, "0").in_flight);
+}
+
+#[test]
+fn resolver_clears_pending_flag_when_receiver_call_failed() {
+    let (mut c, m) = pending_call();
+    assert!(!resolve(&mut c, &m, PromiseResult::Failed));
+    assert!(!wallet(&c, "0").transfer_call_pending);
+    assert_eq!(c.owner_of("0").unwrap(), alice());
+}
+
+#[test]
+fn resolver_clears_pending_flag_when_receiver_keeps_token() {
+    let (mut c, m) = pending_call();
+    assert!(resolve(
+        &mut c,
+        &m,
+        PromiseResult::Successful(b"false".to_vec())
+    ));
+    assert!(!wallet(&c, "0").transfer_call_pending);
+    assert_eq!(c.owner_of("0").unwrap(), m);
+    request(&mut c, &m, "0");
+    assert!(wallet(&c, "0").in_flight);
+}
+
+// ------------------------------------------------------------------------------------ F6
+
+#[test]
+#[should_panic(expected = "gas_limit must be exactly 21000")]
+fn contract_rejects_gas_limit_other_than_21000() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request_with(&mut c, &alice(), "0", DEAD, 1, 21_001, GWEI, GWEI, FEE_OK);
+}
+
+#[test]
+#[should_panic(expected = "max_fee_per_gas must be at least 1 gwei")]
+fn contract_rejects_dust_max_fee() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request_with(&mut c, &alice(), "0", DEAD, 1, 21_000, GWEI - 1, 1, FEE_OK);
+}
+
+#[test]
+#[should_panic(expected = "zero address")]
+fn contract_rejects_zero_address() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request_with(
+        &mut c,
+        &alice(),
+        "0",
+        "0x0000000000000000000000000000000000000000",
+        1,
+        21_000,
+        GWEI,
+        GWEI,
+        FEE_OK,
+    );
+}
+
+// ------------------------------------------------------------------------------------ F7
+
+#[test]
+#[should_panic(expected = "Attach at least 0.01 NEAR")]
+fn request_transfer_rejects_deposit_equal_to_sign_fee() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request_with(&mut c, &alice(), "0", DEAD, 1, 21_000, GWEI, GWEI, SIGN_FEE);
+}
+
+#[test]
+#[should_panic(expected = "Attach at least 0.01 NEAR")]
+fn retry_reserved_rejects_deposit_equal_to_sign_fee() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request(&mut c, &alice(), "0");
+    complete_err(&mut c, "0");
+    set(&alice(), SIGN_FEE);
+    c.retry_reserved("0".into()).detach();
+}
+
+#[test]
+fn minimum_deposit_forwards_one_yocto_and_nothing_is_refunded() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request(&mut c, &alice(), "0"); // FEE_OK = SIGN_FEE + 1 yocto
+    let receipts = get_created_receipts();
+    let sign = receipts
+        .iter()
+        .find(|r| r.receiver_id.as_str() == MPC)
+        .unwrap();
+    let MockAction::FunctionCallWeight {
+        attached_deposit, ..
+    } = &sign.actions[0]
+    else {
+        panic!()
+    };
+    assert_eq!(*attached_deposit, Y1);
+    assert!(paid_to(&receipts, &alice()).is_none());
+}
+
+// ------------------------------------------------------------------------------------ F8
+
+#[test]
+fn first_signature_pins_eth_address_and_exposes_it() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    assert!(c.get_wallet("0".into()).unwrap().eth_address.is_none());
+    request(&mut c, &alice(), "0");
+    complete_ok(&mut c, "0");
+    assert_eq!(
+        c.get_wallet("0".into()).unwrap().eth_address,
+        Some(format!("0x{TEST_KEY_ADDRESS}"))
+    );
+    // same key again is fine
+    request(&mut c, &alice(), "0");
+    complete_ok(&mut c, "0");
+    assert_eq!(wallet(&c, "0").next_nonce, 2);
+}
+
+#[test]
+fn signature_from_a_different_key_is_a_failed_attempt() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request(&mut c, &alice(), "0");
+    complete_ok(&mut c, "0");
+    request(&mut c, &alice(), "0");
+    let hash = reserved_hash(&c, "0");
+    let (wrong, _, _) = mpc_response_with(&other_key(), &hash);
+    let out = call_on_signed(&mut c, "0", 1, ok_result(&wrong));
+    assert!(out.is_none());
+    let w = wallet(&c, "0");
+    assert!(!w.in_flight);
+    assert_eq!(w.next_nonce, 1, "nonce not consumed");
+    assert_eq!(w.reserved.as_ref().unwrap().payload_hash, hash);
+    assert_eq!(
+        w.eth_address,
+        Some(hex::decode(TEST_KEY_ADDRESS).unwrap().try_into().unwrap())
+    );
+    assert_eq!(c.get_sig_log("0".into(), None, None).len(), 1);
+    assert_eq!(failed_logs(), 1);
+
+    // the right key still completes the same reservation
+    set(&alice(), FEE_OK);
+    c.retry_reserved("0".into()).detach();
+    let v = complete_ok(&mut c, "0");
+    assert_eq!(v.nonce, 1);
 }
 
 // ------------------------------------------------------------------- no admin surface

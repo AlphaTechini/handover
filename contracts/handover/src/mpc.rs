@@ -4,14 +4,13 @@
 //! + `domain_id` (domain 0 = secp256k1); the response is `{"scheme":"Secp256k1", big_r, s,
 //! recovery_id}` with lowercase hex and no `0x`.
 
-use near_sdk::{ext_contract, near, Gas, NearToken};
+use near_sdk::{ext_contract, near, Gas};
 
 /// MPC domain 0 is the secp256k1 (Ethereum) domain.
 pub const MPC_DOMAIN_ID: u64 = 0;
 
-/// Exactly 1 yoctoNEAR is forwarded to `sign` (its minimum). The MPC contract refunds any
-/// excess to its predecessor, which would be this contract and not the user.
-pub const MPC_DEPOSIT: NearToken = NearToken::from_yoctonear(1);
+// The deposit forwarded to `sign` is `attached - SIGN_FEE` (at least 1 yocto), decided per call
+// in `request_transfer` / `retry_reserved`, so callers can follow a future MPC fee change.
 
 /// Static gas for the `sign` call. MPC requires >= 15 Tgas prepaid; 50 Tgas leaves ample room
 /// and (with unused-gas weight 1) it also receives whatever gas the caller attached beyond

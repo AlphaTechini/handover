@@ -7,13 +7,13 @@
       "compiler": "rustc 1.97.0",
       "builder": "cargo-near cargo-near-build 0.11.5"
     },
-    "wasm_hash": "H9rva1M4j9xvaFXo5ZjjLCvwf6xj9rBftdEQ98ueimkj"
+    "wasm_hash": "7vZk9pkvnhEdk4JqCdx6fSV9QKfaYPbz7VGTJzqqhLXt"
   },
   "body": {
     "functions": [
       {
         "name": "buy",
-        "doc": " Buy a listed token. Attach at least the price; the excess is refunded to the buyer.\n\n Everything happens in this one call (risk 4): the listing is removed, the NFT moves to\n the buyer (approvals are cleared by the standard transfer), and the seller is paid\n exactly `price`. If any step panics the whole call reverts.",
+        "doc": " Buy a listed token. Attach EXACTLY the price (no refund path) and pass the wallet's\n `next_nonce` as you verified it. If the wallet changed since your clean check (for\n example the seller delisted, signed and relisted) `next_nonce` moved and the call fails.\n\n Everything happens in this one call (risk 4): the listing is removed, the NFT moves to\n the buyer (approvals are cleared by the standard transfer), and the seller is paid\n exactly `price`. If any step panics the whole call reverts.",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -25,6 +25,14 @@
               "name": "token_id",
               "type_schema": {
                 "type": "string"
+              }
+            },
+            {
+              "name": "expected_next_nonce",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
               }
             }
           ]
@@ -233,10 +241,11 @@
       },
       {
         "name": "new",
-        "doc": " Initialise. There is deliberately no owner/admin concept afterwards: nothing can change\n `mpc_contract_id` or `chain_id`, and there is no upgrade method.",
+        "doc": " Initialise. There is deliberately no owner/admin concept afterwards: nothing can change\n `mpc_contract_id` or `chain_id`, and there is no upgrade method.\n\n `#[private]`: only the contract account itself (deploy + init in one batch) can call it,\n which closes init front-running. The explicit check also makes the rule unit-testable.",
         "kind": "call",
         "modifiers": [
-          "init"
+          "init",
+          "private"
         ],
         "params": {
           "serialization_type": "json",
@@ -711,7 +720,7 @@
       },
       {
         "name": "on_signed",
-        "doc": " MPC callback. NEVER panics once authorised: every parse/validation problem is treated as\n a failed attempt that leaves the reservation in place (decision D1).\n\n `#[private]` is enforced only in the compiled wasm wrapper, not in unit tests, so the\n explicit predecessor check below makes the same rule testable and survives refactors.",
+        "doc": " MPC callback. NEVER panics once authorised: every parse/validation problem is treated as\n a failed attempt that leaves the reservation in place (decision D1).\n\n The promise result is read and parsed by hand (no typed `#[callback_result]`), so an\n MPC response of an unexpected shape, garbage bytes or a failed promise are all recorded\n as `sign_failed` instead of aborting the callback.\n\n `#[private]` is enforced only in the compiled wasm wrapper, not in unit tests, so the\n explicit predecessor check below makes the same rule testable and survives refactors.",
         "kind": "call",
         "modifiers": [
           "private"
@@ -735,14 +744,6 @@
             }
           ]
         },
-        "callbacks": [
-          {
-            "serialization_type": "json",
-            "type_schema": {
-              "$ref": "#/definitions/SignatureResponse"
-            }
-          }
-        ],
         "result": {
           "serialization_type": "json",
           "type_schema": {
@@ -758,8 +759,27 @@
         }
       },
       {
+        "name": "release_stuck",
+        "doc": " Recovery when the in-flight attempt never calls back (for example the callback ran out\n of gas): owner only, exactly 1 yocto, only while `in_flight` and more than\n `RELEASE_AFTER_BLOCKS` blocks after the latest `sign` call (MPC's own yield timeout is\n 200 blocks). Clears `in_flight` and KEEPS the reservation, which is exactly the state of\n a failed attempt, so it cannot lose track of a signature that may exist. Use\n `retry_reserved` afterwards.",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
         "name": "request_transfer",
-        "doc": " Ask MPC to sign a plain ETH transfer from this token's address. Owner only.\n\n Deposit: at least `SIGN_FEE` (0.01 NEAR). Exactly 1 yocto is forwarded to MPC; the rest of\n `SIGN_FEE` stays here to pay for the log/reservation storage; anything above `SIGN_FEE` is\n refunded to the caller. Attach 300 Tgas. Returns the logged `SignedTxView` (via callback)\n or null if signing failed (then call `retry_reserved`).\n\n There is intentionally NO parameter for calldata, access list, or chain id.",
+        "doc": " Ask MPC to sign a plain ETH transfer from this token's address. Owner only.\n\n Deposit: more than `SIGN_FEE` (at least `SIGN_FEE` + 1 yocto). The contract keeps\n `SIGN_FEE` to pay for the log/reservation storage and forwards the REST to the MPC `sign`\n call as its fee (no refund to the caller, so callers can follow a future MPC fee change).\n Attach 300 Tgas. Returns the logged `SignedTxView` (via callback) or null if signing\n failed (then call `retry_reserved`).\n\n There is intentionally NO parameter for calldata, access list, or chain id.",
         "kind": "call",
         "modifiers": [
           "payable"
@@ -859,6 +879,7 @@
             "mint_fee",
             "mpc_contract_id",
             "path_prefix",
+            "release_after_blocks",
             "sign_fee"
           ],
           "properties": {
@@ -877,31 +898,12 @@
             "path_prefix": {
               "type": "string"
             },
+            "release_after_blocks": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
             "sign_fee": {
-              "type": "string"
-            }
-          }
-        },
-        "K256AffinePoint": {
-          "type": "object",
-          "required": [
-            "affine_point"
-          ],
-          "properties": {
-            "affine_point": {
-              "description": "33-byte compressed point as hex: `02|03` prefix + 32-byte x. x is the signature `r`.",
-              "type": "string"
-            }
-          }
-        },
-        "K256Scalar": {
-          "type": "object",
-          "required": [
-            "scalar"
-          ],
-          "properties": {
-            "scalar": {
-              "description": "32-byte scalar as hex.",
               "type": "string"
             }
           }
@@ -991,6 +993,7 @@
             "max_priority_fee_per_gas",
             "nonce",
             "payload_hash_hex",
+            "requested_at_block",
             "requested_at_ns",
             "to",
             "value_wei"
@@ -1018,6 +1021,11 @@
             "payload_hash_hex": {
               "type": "string"
             },
+            "requested_at_block": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
             "requested_at_ns": {
               "type": "string"
             },
@@ -1028,38 +1036,6 @@
               "type": "string"
             }
           }
-        },
-        "SignatureResponse": {
-          "oneOf": [
-            {
-              "type": "object",
-              "required": [
-                "big_r",
-                "recovery_id",
-                "s",
-                "scheme"
-              ],
-              "properties": {
-                "big_r": {
-                  "$ref": "#/definitions/K256AffinePoint"
-                },
-                "recovery_id": {
-                  "type": "integer",
-                  "format": "uint8",
-                  "minimum": 0.0
-                },
-                "s": {
-                  "$ref": "#/definitions/K256Scalar"
-                },
-                "scheme": {
-                  "type": "string",
-                  "enum": [
-                    "Secp256k1"
-                  ]
-                }
-              }
-            }
-          ]
         },
         "SignedTxView": {
           "type": "object",
@@ -1239,9 +1215,16 @@
             "owner_id",
             "path",
             "sig_count",
-            "token_id"
+            "token_id",
+            "transfer_call_pending"
           ],
           "properties": {
+            "eth_address": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "in_flight": {
               "type": "boolean"
             },
@@ -1287,6 +1270,9 @@
             },
             "token_id": {
               "type": "string"
+            },
+            "transfer_call_pending": {
+              "type": "boolean"
             }
           }
         }

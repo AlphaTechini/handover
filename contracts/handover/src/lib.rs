@@ -59,11 +59,20 @@ pub use types::*;
 
 /// Path prefix for MPC key derivation: the path of token `7` is `handover-7`.
 pub const PATH_PREFIX: &str = "handover-";
-/// Minimum attached to `request_transfer` / `retry_reserved`. 1 yocto goes to MPC; the rest
-/// stays in the contract to pay storage for the signature log and the reservation.
+/// Kept by the contract from every `request_transfer` / `retry_reserved` deposit to pay storage
+/// for the signature log and the reservation. The deposit must exceed it; the remainder (at
+/// least 1 yocto) is forwarded to MPC as its fee.
 pub const SIGN_FEE: NearToken = NearToken::from_millinear(10); // 0.01 NEAR
-/// Minimum attached to `nft_mint`. Storage actually used is charged, the rest is refunded.
+/// Minimum attached to `nft_mint`. Measured storage + `TOKEN_STORAGE_BUFFER_BYTES` is charged,
+/// the rest is refunded.
 pub const MINT_FEE: NearToken = NearToken::from_millinear(50); // 0.05 NEAR
+/// Extra bytes of storage prepaid per token at mint (listing, reservation, owner-set entry for
+/// a fresh receiver, transfer-call marker, pinned address), so later actions by others (listing,
+/// transfers to fresh accounts) cannot drain the contract balance.
+pub const TOKEN_STORAGE_BUFFER_BYTES: u64 = 1500;
+/// `release_stuck` is allowed once more than this many blocks have passed since the latest
+/// `sign` call (MPC's own yield timeout is 200 blocks).
+pub const RELEASE_AFTER_BLOCKS: u64 = 300;
 /// Default and maximum page sizes for list views.
 pub const DEFAULT_PAGE: u64 = 50;
 pub const MAX_PAGE: u64 = 100;
@@ -101,8 +110,16 @@ pub struct Handover {
 impl Handover {
     /// Initialise. There is deliberately no owner/admin concept afterwards: nothing can change
     /// `mpc_contract_id` or `chain_id`, and there is no upgrade method.
+    ///
+    /// `#[private]`: only the contract account itself (deploy + init in one batch) can call it,
+    /// which closes init front-running. The explicit check also makes the rule unit-testable.
     #[init]
+    #[private]
     pub fn new(mpc_contract_id: AccountId, chain_id: u64) -> Self {
+        require!(
+            env::predecessor_account_id() == env::current_account_id(),
+            "Method new is private"
+        );
         require!(!env::state_exists(), "Already initialized");
         let metadata = NFTContractMetadata {
             spec: NFT_METADATA_SPEC.to_string(),
@@ -178,11 +195,15 @@ impl Handover {
                 in_flight: false,
                 reserved: None,
                 minted_at_ns: env::block_timestamp(),
+                transfer_call_pending: false,
+                eth_address: None,
             },
         );
         self.wallets.flush(); // store collections write lazily; flush so usage is measurable
         let used = env::storage_usage().saturating_sub(before);
-        let cost = env::storage_byte_cost().saturating_mul(used.into());
+        // Measured cost plus the per-token buffer that prepays the bounded later storage.
+        let cost = env::storage_byte_cost()
+            .saturating_mul(used.saturating_add(TOKEN_STORAGE_BUFFER_BYTES).into());
         require!(cost <= deposit, "Deposit does not cover storage");
         let refund = deposit.saturating_sub(cost);
         if refund > NearToken::from_yoctonear(1) {
@@ -228,10 +249,23 @@ impl Handover {
         self.listings.contains_key(token_id)
     }
 
+    /// Panics while an `nft_transfer_call` is outstanding: the receiver temporarily owns the
+    /// token but it may still be returned, so nothing about the wallet may change meanwhile.
+    pub(crate) fn assert_no_transfer_call(&self, token_id: &str) {
+        if let Some(w) = self.wallets.get(token_id) {
+            require!(
+                !w.transfer_call_pending,
+                "Token is in a pending transfer call"
+            );
+        }
+    }
+
     /// Ownership may only change when the wallet is quiescent: not listed (a listed token must be
-    /// delisted first), no MPC call in flight, no reserved transaction awaiting a signature.
+    /// delisted first), no MPC call in flight, no reserved transaction awaiting a signature, no
+    /// transfer call outstanding.
     /// Otherwise a seller could hand the token over while a signature is still being produced.
     pub(crate) fn assert_transferable(&self, token_id: &str) {
+        self.assert_no_transfer_call(token_id);
         if let Some(w) = self.wallets.get(token_id) {
             require!(
                 !self.is_listed(token_id),
@@ -273,8 +307,12 @@ impl NonFungibleTokenCore for Handover {
         msg: String,
     ) -> PromiseOrValue<bool> {
         self.assert_transferable(&token_id);
-        self.tokens
-            .nft_transfer_call(receiver_id, token_id, approval_id, memo, msg)
+        let result =
+            self.tokens
+                .nft_transfer_call(receiver_id, token_id.clone(), approval_id, memo, msg);
+        // Freeze the wallet until `nft_resolve_transfer` has decided who owns the token.
+        self.wallet_mut(&token_id).transfer_call_pending = true;
+        result
     }
 
     fn nft_token(
@@ -295,12 +333,17 @@ impl NonFungibleTokenResolver for Handover {
         token_id: near_contract_standards::non_fungible_token::TokenId,
         approved_account_ids: Option<HashMap<AccountId, u64>>,
     ) -> bool {
-        self.tokens.nft_resolve_transfer(
+        let kept = self.tokens.nft_resolve_transfer(
             previous_owner_id,
             receiver_id,
-            token_id,
+            token_id.clone(),
             approved_account_ids,
-        )
+        );
+        // Every path (kept or reverted) ends the transfer call.
+        if let Some(w) = self.wallets.get_mut(&token_id) {
+            w.transfer_call_pending = false;
+        }
+        kept
     }
 }
 
