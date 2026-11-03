@@ -1,0 +1,13 @@
+{
+  "name": "handover",
+  "private": true,
+  "version": "0.1.0",
+  "description": "An NFT that owns its own Ethereum wallet, and a sale flow that lets you buy that wallet without trusting the seller.",
+  "license": "MIT",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "dev": "pnpm --filter web dev"
+  }
+}
