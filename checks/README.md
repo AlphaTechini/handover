@@ -22,8 +22,8 @@ Scripts run as `pnpm --filter checks check:<n> [-- args]`. Each one:
 - prints a PASS or FAIL block with its evidence, and never prints a private key;
 - appends one JSON line to `evidence/checks.log` for each live verdict (not for offline self-tests,
   and not for an unreachable endpoint, which is reported as an error and recorded nowhere).
-  `evidence/` is for your real runs only. Note that the root `.gitignore` ignores `*.log`, so
-  `checks.log` is not committed by default. Commit the evidence you want to keep explicitly.
+  `evidence/` is for your real runs only. The root `.gitignore` ignores `*.log` except
+  `evidence/*.log`, so `checks.log` can be committed as evidence.
 
 The failure modes are deliberately loud. A missing variable prints the variable name and points to
 `.env.example`. A network error prints the URL and the cause (for example `ENOTFOUND` or a proxy 403)

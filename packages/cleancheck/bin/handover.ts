@@ -18,12 +18,12 @@ const USAGE = `usage:
 
 env:
   HANDOVER_CONTRACT   NEAR contract account (required for status and snapshot)
-  NEAR_RPC            default https://rpc.testnet.near.org
+  NEAR_RPC            default https://test.rpc.fastnear.com
   SEPOLIA_RPC         default https://ethereum-sepolia-rpc.publicnode.com
   MPC_CONTRACT        default v1.signer-prod.testnet`;
 
 const DEFAULTS = {
-  nearRpc: 'https://rpc.testnet.near.org',
+  nearRpc: 'https://test.rpc.fastnear.com',
   sepoliaRpc: 'https://ethereum-sepolia-rpc.publicnode.com',
   mpc: 'v1.signer-prod.testnet',
 };
