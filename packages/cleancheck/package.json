@@ -5,12 +5,25 @@
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "handover": "./bin/handover.ts"
+  },
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "cli": "tsx bin/handover.ts",
+    "fixtures": "tsx test/fixtures/generate.ts"
   },
   "devDependencies": {
+    "@types/node": "^22",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "vitest": "^5.1.0"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.4.0"
   }
 }
