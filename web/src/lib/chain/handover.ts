@@ -13,7 +13,7 @@ import {
 	type ConfigView
 } from './convert';
 import { getFees } from './eth';
-import { clampFees, FIXED_GAS_LIMIT } from './fees';
+import { clampFees, MIN_GAS_LIMIT } from './fees';
 import type { ContractConfig, Listing, SignedTx, WalletState } from './types';
 
 function view<T>(method: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -94,8 +94,8 @@ export async function mint(): Promise<string> {
 
 export { blocksUntilRelease, canReleaseStuck };
 
-/** Gas limit is fixed by the contract (plain transfer only), so there is no override. */
-export interface TransferRequest { tokenId: string; to: `0x${string}`; valueWei: bigint; maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; }
+/** `gasLimit` defaults to 21000; pass the result of `transferGasLimit` for recipients that run code. */
+export interface TransferRequest { tokenId: string; to: `0x${string}`; valueWei: bigint; gasLimit?: bigint; maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; }
 
 const POLL_INTERVAL_MS = 3_000;
 const POLL_TIMEOUT_MS = 90_000;
@@ -154,7 +154,7 @@ export async function requestTransfer(req: TransferRequest): Promise<SignedTx> {
 			token_id: req.tokenId,
 			to: req.to.toLowerCase(),
 			value_wei: req.valueWei.toString(),
-			gas_limit: FIXED_GAS_LIMIT.toString(),
+			gas_limit: (req.gasLimit ?? MIN_GAS_LIMIT).toString(),
 			max_fee_per_gas: maxFeePerGas.toString(),
 			max_priority_fee_per_gas: maxPriorityFeePerGas.toString()
 		},

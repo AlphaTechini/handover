@@ -191,7 +191,14 @@ async function main(): Promise<number> {
   }
 
   const checksum = toChecksumAddress(address);
-  const result = await runCleanCheck({ nearRpc, sepoliaRpc: sepRpc, contractId: contract, tokenId, address: checksum });
+  // Public RPCs are load-balanced: right after a receipt, the node answering the nonce query can
+  // still be a block behind. Re-read until it has caught up with every nonce that just mined.
+  const minedUpTo = Math.max(-1, ...sent.filter((e) => e.receipt_status === 'success').map((e) => e.nonce));
+  let result = await runCleanCheck({ nearRpc, sepoliaRpc: sepRpc, contractId: contract, tokenId, address: checksum });
+  for (let i = 0; i < 5 && result.chainNonce <= minedUpTo; i++) {
+    await new Promise((r) => setTimeout(r, 3_000));
+    result = await runCleanCheck({ nearRpc, sepoliaRpc: sepRpc, contractId: contract, tokenId, address: checksum });
+  }
   console.log('');
   console.log(formatReport({ contractId: contract, tokenId, address: checksum, balanceWei: result.balanceWei, result, sigLogLength: result.sigLog.length }, { color: process.stdout.isTTY === true }));
 

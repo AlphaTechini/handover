@@ -1,7 +1,7 @@
 import { createPublicClient, http, keccak256, type PublicClient } from 'viem';
 import { sepolia } from 'viem/chains';
 import { ETH_EXPLORER, NEAR_EXPLORER, SEPOLIA_RPC } from './config';
-import { clampFees, FALLBACK_FEES, isAlreadyKnownError, withHeadroom } from './fees';
+import { clampFees, FALLBACK_FEES, isAlreadyKnownError, pickGasLimit, withHeadroom } from './fees';
 import type { EthFees, Hex } from './types';
 
 let client: PublicClient | null = null;
@@ -30,6 +30,15 @@ export async function getFees(): Promise<EthFees> {
 	} catch {
 		return FALLBACK_FEES;
 	}
+}
+
+/**
+ * Gas limit for sending `value` from `from` to `to`, always estimated: an empty recipient account
+ * and an EIP-7702 smart account both look like plain addresses but cost far more than 21000.
+ * Null means the recipient needs more gas than the contract will sign. Throws if estimation fails.
+ */
+export async function transferGasLimit(from: Hex, to: Hex, value: bigint): Promise<bigint | null> {
+	return pickGasLimit(await pc().estimateGas({ account: from, to, value }));
 }
 
 /** eth_sendRawTransaction; treats "already known" / "nonce too low" as success and returns keccak256(raw) */

@@ -2,13 +2,16 @@
 	import {
 		broadcast,
 		clampFees,
-		FIXED_GAS_LIMIT,
+		MAX_GAS_LIMIT,
+		MIN_GAS_LIMIT,
 		etherscanTx,
 		formatEth,
 		formatNear,
 		getFees,
+		getNonces,
 		parseEth,
 		requestTransfer,
+		transferGasLimit,
 		waitForReceipt,
 		type EthFees,
 		type Hex,
@@ -23,11 +26,9 @@
 	import { feeConfig, signFeeYocto } from './extras';
 	import { toast } from './toast.svelte';
 
-	/** Fixed by the contract: plain transfers only, so the gas limit is not editable. */
-	const GAS_LIMIT = FIXED_GAS_LIMIT;
-
 	let {
 		tokenId,
+		fromAddress = null,
 		balanceWei = null,
 		mode = 'owner',
 		blocked = null,
@@ -36,6 +37,8 @@
 		/** Reason the owner cannot request a signature right now (in flight, reserved) */
 		blocked?: string | null;
 		tokenId: string;
+		/** The wallet's Ethereum address, used to estimate gas for recipients that run code */
+		fromAddress?: Hex | null;
 		balanceWei?: bigint | null;
 		/** 'refusal': the connected account is not the owner; the contract is expected to refuse */
 		mode?: 'owner' | 'refusal';
@@ -83,9 +86,46 @@
 			return null;
 		}
 	});
-	const feeWei = $derived(fees ? fees.maxFeePerGas * GAS_LIMIT : null);
+	// Estimated once the form is filled in: empty accounts and smart accounts need more than 21000.
+	let gasLimit = $state<bigint | null>(MIN_GAS_LIMIT);
+	let gasEstimating = $state(false);
+	let gasFailed = $state(false);
+	let gasRun = 0;
+	$effect(() => {
+		const recipient = to.trim() as Hex;
+		const value = valueWei;
+		const from = fromAddress;
+		const balance = balanceWei;
+		gasLimit = MIN_GAS_LIMIT;
+		gasFailed = false;
+		// The node cannot estimate a transfer the wallet cannot pay for; the balance error covers it.
+		if (mode !== 'owner' || !toValid || !from || value === null || value <= 0n || (balance !== null && value > balance)) {
+			gasEstimating = false;
+			return;
+		}
+		const run = ++gasRun;
+		gasEstimating = true;
+		const timer = setTimeout(() => {
+			transferGasLimit(from, recipient, value)
+				.then((g) => run === gasRun && (gasLimit = g))
+				.catch(() => run === gasRun && (gasFailed = true))
+				.finally(() => run === gasRun && (gasEstimating = false));
+		}, 300);
+		return () => clearTimeout(timer);
+	});
+
+	const feeWei = $derived(fees && gasLimit !== null ? fees.maxFeePerGas * gasLimit : null);
 	const totalWei = $derived(valueWei !== null && feeWei !== null ? valueWei + feeWei : null);
 	const overBalance = $derived(balanceWei !== null && totalWei !== null && totalWei > balanceWei);
+	const gasError = $derived(
+		mode !== 'owner'
+			? ''
+			: gasLimit === null
+				? `This recipient needs more than ${MAX_GAS_LIMIT.toLocaleString('en-US')} gas, which the contract will not sign.`
+				: gasFailed
+					? 'Could not estimate gas for this recipient. It may reject ETH; try a plain address.'
+					: ''
+	);
 
 	const toError = $derived(touched && to.trim() && !toValid ? 'Enter a 0x address with 40 hex characters.' : '');
 	const amountError = $derived(
@@ -96,7 +136,10 @@
 				: ''
 	);
 	const canSubmit = $derived(
-		toValid && valueWei !== null && valueWei > 0n && (mode === 'refusal' || (!overBalance && !blocked))
+		toValid &&
+			valueWei !== null &&
+			valueWei > 0n &&
+			(mode === 'refusal' || (!overBalance && !blocked && !gasEstimating && !gasError))
 	);
 
 	function setMax() {
@@ -160,6 +203,7 @@
 				tokenId,
 				to: to.trim() as Hex,
 				valueWei,
+				gasLimit: mode === 'owner' && gasLimit !== null ? gasLimit : MIN_GAS_LIMIT,
 				// The contract refuses a max fee below 1 gwei; clampFees raises it to the floor.
 				...(fees ? clampFees(fees) : {})
 			});
@@ -185,6 +229,9 @@
 		phase = 'confirming';
 		try {
 			receipt = await waitForReceipt(txHash);
+			// Load-balanced RPCs can answer the next nonce query from a node a block behind;
+			// wait for it to catch up so the refreshed verdict does not flash dirty.
+			if (fromAddress) await nonceCaughtUp(fromAddress, signed.nonce + 1);
 			phase = receipt === 'success' ? 'done' : 'failed';
 			toast({
 				tone: receipt === 'success' ? 'success' : 'error',
@@ -197,6 +244,17 @@
 			fail('confirm', x);
 		}
 		onsettled?.();
+	}
+
+	async function nonceCaughtUp(address: Hex, expected: number) {
+		for (let i = 0; i < 5; i++) {
+			try {
+				if ((await getNonces(address)).latest >= expected) return;
+			} catch {
+				/* transient RPC error: try again */
+			}
+			await new Promise((r) => setTimeout(r, 2_000));
+		}
 	}
 
 	function fail(at: 'sign' | 'broadcast' | 'confirm', x: unknown): DescribedError {
@@ -265,12 +323,19 @@
 				<span class="suffix">ETH</span>
 			</div>
 			{#if amountError}<span class="field-error">{amountError}</span>{/if}
+			{#if gasError}<span class="field-error">{gasError}</span>{/if}
 		</div>
 
 		<dl class="fees" id="{uid}-fee">
 			<div>
-				<dt>Gas limit (fixed)</dt>
-				<dd class="mono">21,000</dd>
+				<dt>Gas limit</dt>
+				<dd class="mono">
+					{#if gasEstimating}<span class="muted">estimating</span>{:else if gasLimit !== null}{gasLimit.toLocaleString(
+							'en-US'
+						)}{#if gasLimit > MIN_GAS_LIMIT}<span class="muted"> (new or smart account)</span>{/if}{:else}<span class="muted"
+							>too high</span
+						>{/if}
+				</dd>
 			</div>
 			<div>
 				<dt>Max network fee</dt>
@@ -301,8 +366,8 @@
 			{#if mode === 'refusal'}
 				The contract checks the caller against the NFT’s current owner before it asks for any signature.
 			{:else}
-				The contract only signs a plain ETH transfer it builds itself, with a fixed gas limit of 21,000. Sending to a contract
-				that runs code when it receives ETH may fail. Fees are set automatically from Sepolia, never below 1 gwei.
+				The contract only signs a plain ETH transfer it builds itself, with no calldata. Gas is estimated for the recipient: 21,000
+				for an existing address, more for a new or smart account, up to 300,000. Fees are set from Sepolia, never below 1 gwei.
 			{/if}
 		</p>
 	</form>

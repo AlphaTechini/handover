@@ -484,8 +484,16 @@ fn transfer_parameter_validation() {
     }
     assert!(ok(DEAD, 0, 21_000, GWEI, 1).is_err(), "zero value");
     assert!(ok(DEAD, 1, 20_999, GWEI, 1).is_err(), "gas below 21000");
-    assert!(ok(DEAD, 1, 21_001, GWEI, 1).is_err(), "gas above 21000");
-    assert!(ok(DEAD, 1, 100_000, GWEI, 1).is_err(), "gas far above");
+    assert!(
+        ok(DEAD, 1, 24_393, GWEI, 1).is_ok(),
+        "smart-account recipient"
+    );
+    assert!(
+        ok(DEAD, 1, 207_391, GWEI, 1).is_ok(),
+        "value to an empty account (Glamsterdam)"
+    );
+    assert!(ok(DEAD, 1, 300_000, GWEI, 1).is_ok(), "gas at the cap");
+    assert!(ok(DEAD, 1, 300_001, GWEI, 1).is_err(), "gas above the cap");
     assert!(ok(DEAD, 1, 21_000, 0, 0).is_err(), "zero fees");
     assert!(ok(DEAD, 1, 21_000, GWEI, 0).is_err(), "zero priority fee");
     assert!(
@@ -1890,11 +1898,45 @@ fn resolver_clears_pending_flag_when_receiver_keeps_token() {
 // ------------------------------------------------------------------------------------ F6
 
 #[test]
-#[should_panic(expected = "gas_limit must be exactly 21000")]
-fn contract_rejects_gas_limit_other_than_21000() {
+#[should_panic(expected = "gas_limit must be between 21000 and 300000")]
+fn contract_rejects_gas_limit_below_21000() {
     let mut c = new_contract();
     mint(&mut c, &alice());
-    request_with(&mut c, &alice(), "0", DEAD, 1, 21_001, GWEI, GWEI, FEE_OK);
+    request_with(&mut c, &alice(), "0", DEAD, 1, 20_999, GWEI, GWEI, FEE_OK);
+}
+
+#[test]
+#[should_panic(expected = "gas_limit must be between 21000 and 300000")]
+fn contract_rejects_gas_limit_above_cap() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request_with(&mut c, &alice(), "0", DEAD, 1, 300_001, GWEI, GWEI, FEE_OK);
+}
+
+#[test]
+fn smart_account_gas_limit_is_signed_as_requested() {
+    let mut c = new_contract();
+    mint(&mut c, &alice());
+    request_with(
+        &mut c,
+        &alice(),
+        "0",
+        DEAD,
+        100,
+        24_393,
+        30 * GWEI,
+        GWEI,
+        FEE_OK,
+    );
+    let view = complete_ok(&mut c, "0");
+    assert_eq!(view.gas_limit.0, 24_393);
+    let (items, _) = decode_signed(&raw_bytes(&view));
+    assert_eq!(
+        items[4],
+        vec![0x5f, 0x49],
+        "gas limit 24393 in the signed tx"
+    );
+    assert!(items[7].is_empty(), "still no calldata");
 }
 
 #[test]

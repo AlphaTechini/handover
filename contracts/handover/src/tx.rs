@@ -12,9 +12,15 @@ use omni_transaction::{TransactionBuilder, TxBuilder, EVM};
 
 /// Ethereum Sepolia.
 pub const SEPOLIA_CHAIN_ID: u64 = 11_155_111;
-/// Gas of a plain ETH transfer. The only gas limit the contract signs: a higher limit would
-/// let a seller pre-fund a contract recipient with receive() logic, and 21000 is exact for EOAs.
-pub const TRANSFER_GAS_LIMIT: u128 = 21_000;
+/// Gas of a plain ETH transfer to an existing account. Anything lower can never be mined, which
+/// would leave the nonce stuck behind a logged signature forever.
+pub const MIN_TRANSFER_GAS_LIMIT: u128 = 21_000;
+/// Upper bound for recipients that cost more than that. Since Glamsterdam (EIP-2780/EIP-8037,
+/// live on Sepolia since 2026-10-06) value sent to an empty account pays 183,600 state gas for
+/// creating it (~207k in total), and EIP-7702 smart accounts run code on receive (~24k).
+/// A revert still consumes the nonce, so recipient code cannot hide a signature from the clean
+/// check; the cap only bounds the fee a signed transfer can carry.
+pub const MAX_TRANSFER_GAS_LIMIT: u128 = 300_000;
 /// Lowest accepted `max_fee_per_gas` (1 gwei), so a signed tx cannot be made unmineable for
 /// years by setting a dust fee (it would stay a valid pre-signed tx in the log).
 pub const MIN_MAX_FEE_PER_GAS: u128 = 1_000_000_000;
@@ -54,8 +60,8 @@ pub fn validate_transfer(
     if to == [0u8; 20] {
         return Err("`to` must not be the zero address");
     }
-    if gas_limit != TRANSFER_GAS_LIMIT {
-        return Err("gas_limit must be exactly 21000");
+    if !(MIN_TRANSFER_GAS_LIMIT..=MAX_TRANSFER_GAS_LIMIT).contains(&gas_limit) {
+        return Err("gas_limit must be between 21000 and 300000");
     }
     if max_fee_per_gas < MIN_MAX_FEE_PER_GAS {
         return Err("max_fee_per_gas must be at least 1 gwei (10^9 wei)");

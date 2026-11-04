@@ -704,6 +704,7 @@
 								{/if}
 								<SendForm
 									tokenId={w.tokenId}
+									fromAddress={addr}
 									balanceWei={s?.balanceWei ?? null}
 									blocked={blockedReason}
 									onsettled={() => status.load()}

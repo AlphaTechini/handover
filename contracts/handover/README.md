@@ -8,7 +8,7 @@ There is no owner, no admin method, no config setter and no upgrade path. Delete
 full-access keys after the final deploy and nobody can change the contract.
 
 ```bash
-cargo test                                   # 97 unit tests
+cargo test                                   # 99 unit tests (Windows: set AWS_LC_SYS_PREBUILT_NASM=1)
 cargo clippy --all-targets -- -D warnings
 cargo near build non-reproducible-wasm --locked --out-dir ../res
 ```
@@ -45,7 +45,7 @@ by the first accepted signature, `0x` lowercase, or null) and `reserved.requeste
 - `buy`: exactly the listed price; more or less is rejected, so there is no refund path.
 
 Parameter rules: `to` is `0x` + 40 hex (either case) and not the zero address; `value_wei > 0`;
-`gas_limit == 21000` exactly; `max_fee_per_gas >= 1 gwei` (10^9 wei);
+`21000 <= gas_limit <= 300000`; `max_fee_per_gas >= 1 gwei` (10^9 wei);
 `0 < max_priority_fee_per_gas <= max_fee_per_gas`. There is no parameter for calldata, an
 access list or a chain id.
 
@@ -96,8 +96,11 @@ static 50 Tgas plus unused gas (weight 1); `on_signed` gets a static 30 Tgas (we
   receiver cannot obtain a signature before the token may return.
 - If the seller account of a sale no longer exists (deleted), the payment is lost to this contract.
   Sellers should keep their account alive until a sale completes.
-- `gas_limit` is fixed at 21000 (a plain transfer): a recipient that is a contract with `receive()`
-  logic needing more gas will fail on Ethereum. Only EOAs and trivial receivers work.
+- `gas_limit` must be 21000 to 300000. 21000 covers a transfer to an existing account. Since
+  Sepolia's Glamsterdam upgrade (EIP-2780/EIP-8037, 2026-10-06) value sent to an account that does
+  not exist yet costs ~207k (183,600 of it for creating the account), and EIP-7702 smart accounts
+  run code on receive (~24k). Callers estimate the limit per recipient; a recipient needing more than
+  300000 cannot be paid. A revert still consumes the nonce, so it never hides a signature.
 - `release_stuck` only unlocks the contract-side flag. The abandoned attempt's signature may still
   exist on chain, which is why the reservation stays and the next signature is for the identical
   payload; it is no escape hatch for changing a reserved transaction.

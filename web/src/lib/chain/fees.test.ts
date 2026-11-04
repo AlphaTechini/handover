@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { clampFees, FALLBACK_FEES, FIXED_GAS_LIMIT, MIN_MAX_FEE_PER_GAS, isAlreadyKnownError, withHeadroom } from './fees';
+import {
+	clampFees,
+	FALLBACK_FEES,
+	MAX_GAS_LIMIT,
+	MIN_GAS_LIMIT,
+	MIN_MAX_FEE_PER_GAS,
+	isAlreadyKnownError,
+	pickGasLimit,
+	withHeadroom
+} from './fees';
 
 describe('fees', () => {
 	it('adds 20% headroom to maxFee only', () => {
@@ -24,5 +33,16 @@ describe('fees', () => {
 		expect(clampFees({ maxFeePerGas: 9_000_000_000n, maxPriorityFeePerGas: 0n }).maxPriorityFeePerGas).toBe(1n);
 		expect(clampFees(FALLBACK_FEES)).toEqual(FALLBACK_FEES);
 	});
-	it('gas limit is fixed at 21000', () => expect(FIXED_GAS_LIMIT).toBe(21000n));
+	it('gas limit range matches the contract (21000..300000)', () => {
+		expect(MIN_GAS_LIMIT).toBe(21000n);
+		expect(MAX_GAS_LIMIT).toBe(300000n);
+	});
+	it('existing account gets exactly 21000', () => expect(pickGasLimit(21000n)).toBe(21000n));
+	it('smart account estimate gets 20% headroom', () => expect(pickGasLimit(24393n)).toBe(29271n));
+	it('empty account (Glamsterdam) fits under the cap', () => expect(pickGasLimit(207391n)).toBe(248869n));
+	it('small estimates are raised to 21000 and big ones capped', () => {
+		expect(pickGasLimit(15000n)).toBe(21000n);
+		expect(pickGasLimit(280000n)).toBe(300000n);
+	});
+	it('refuses recipients that need more than the cap', () => expect(pickGasLimit(300001n)).toBeNull());
 });
