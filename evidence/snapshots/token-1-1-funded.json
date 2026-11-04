@@ -1,0 +1,28 @@
+{
+  "kind": "handover-snapshot",
+  "version": 1,
+  "synthetic": false,
+  "capturedAt": "2026-11-04T12:50:20.630Z",
+  "contractId": "handover.handover-alpha.testnet",
+  "tokenId": "1",
+  "address": "0x0831a41ae07e0309bcbf67c63c42063e0dd0170b",
+  "wallet": {
+    "token_id": "1",
+    "owner_id": "handover-alpha.testnet",
+    "path": "handover-1",
+    "next_nonce": 0,
+    "in_flight": false,
+    "transfer_call_pending": false,
+    "eth_address": null,
+    "listing": null,
+    "reserved": null,
+    "sig_count": 0,
+    "minted_at_ns": "1793795821904461885"
+  },
+  "sigLog": [],
+  "chain": {
+    "confirmedNonce": 0,
+    "pendingNonce": 0,
+    "balanceWei": "4400000000000000"
+  }
+}

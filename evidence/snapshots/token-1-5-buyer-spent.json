@@ -1,0 +1,51 @@
+{
+  "kind": "handover-snapshot",
+  "version": 1,
+  "synthetic": false,
+  "capturedAt": "2026-11-04T13:01:11.386Z",
+  "contractId": "handover.handover-alpha.testnet",
+  "tokenId": "1",
+  "address": "0x0831a41ae07e0309bcbf67c63c42063e0dd0170b",
+  "wallet": {
+    "token_id": "1",
+    "owner_id": "handover-alpha-buyer.testnet",
+    "path": "handover-1",
+    "next_nonce": 2,
+    "in_flight": false,
+    "transfer_call_pending": false,
+    "eth_address": "0x0831a41ae07e0309bcbf67c63c42063e0dd0170b",
+    "listing": null,
+    "reserved": null,
+    "sig_count": 2,
+    "minted_at_ns": "1793795821904461885"
+  },
+  "sigLog": [
+    {
+      "nonce": 0,
+      "to": "0x6e302e86b4712eb5cc63ca61acfbc6df8ce3c342",
+      "value_wei": "100000000000000",
+      "gas_limit": "29272",
+      "max_fee_per_gas": "2000000000",
+      "max_priority_fee_per_gas": "1000000000",
+      "tx_hash": "0xc5bc75b7e7cc66eb09b5205fcd367e8e94eb705b85506dda7f82806946f8b029",
+      "raw_signed_tx_hex": "0x02f87383aa36a780843b9aca008477359400827258946e302e86b4712eb5cc63ca61acfbc6df8ce3c342865af3107a400080c080a075f199aab230d586932619e159025b7c61f2b38efa8f8ee5c49779a42467c937a03060f9f12573ef1e7f49a7ebcd2cb74b248c5fd962b07b72cc07b495952a6431",
+      "signed_at_ns": "1793796629847649888"
+    },
+    {
+      "nonce": 1,
+      "to": "0x6e302e86b4712eb5cc63ca61acfbc6df8ce3c342",
+      "value_wei": "100000000000000",
+      "gas_limit": "29272",
+      "max_fee_per_gas": "2000000000",
+      "max_priority_fee_per_gas": "1000000000",
+      "tx_hash": "0x909484dbebcdec72105e7badddabbe5ff9c05283371b41199b297ac07d7fdab3",
+      "raw_signed_tx_hex": "0x02f87383aa36a701843b9aca008477359400827258946e302e86b4712eb5cc63ca61acfbc6df8ce3c342865af3107a400080c080a0ccc42d965295579bdd42410e5549a87d4aeb21abc9fd1aa177ee00b9d004c0e9a01b10e85d379ff96aa02114df0c8faa7bbc5ac5aa42a97db8c7d03657a01ad52d",
+      "signed_at_ns": "1793796948339891062"
+    }
+  ],
+  "chain": {
+    "confirmedNonce": 2,
+    "pendingNonce": 2,
+    "balanceWei": "4151889999158075"
+  }
+}

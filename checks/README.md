@@ -151,7 +151,15 @@ PASS  02-mpc-sign
 
 ## What has been run here
 
-The sandbox could not reach NEAR or Sepolia RPC. Its checks were run as follows.
+Live, on 2026-11-04: checks 1, 2, 3 (with `--sig`), 5 and 6 PASS against NEAR testnet and Sepolia;
+the verdicts are in [`evidence/checks.log`](../evidence/checks.log). The probe ran at
+`handover-alpha-probe.testnet`; on Windows it was built with
+`cargo near build non-reproducible-wasm --locked --no-abi` (the ABI step fails to link there) and
+`AWS_LC_SYS_PREBUILT_NASM=1`. Check 5 re-reads the clean check for up to 15 s after the receipts,
+because a load-balanced public RPC can answer the nonce query from a node one block behind.
+
+Before that, the sandbox that wrote the scripts could not reach NEAR or Sepolia RPC. Its checks were
+run as follows.
 
 - Offline: check 3 `--offline` PASSes against the research vector. Check 4 PASSes with the pinned
   vector. `cargo test` for the probe passes (3 tests, including the omni-vs-viem payload match).

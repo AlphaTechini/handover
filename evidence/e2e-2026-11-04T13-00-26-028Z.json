@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-11-04T13:00:26.028Z",
+  "contract": "handover.handover-alpha.testnet",
+  "token_id": "1",
+  "address": "0x0831a41ae07E0309BCbF67C63C42063e0Dd0170B",
+  "verdict": "clean",
+  "issued_nonce": 2,
+  "chain_nonce": 2,
+  "sent": []
+}

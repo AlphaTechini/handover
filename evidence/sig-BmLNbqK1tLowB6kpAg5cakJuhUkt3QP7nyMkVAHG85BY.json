@@ -1,0 +1,23 @@
+{
+  "note": "MPC signature response captured by checks/02-mpc-sign.ts --parse. Real testnet data.",
+  "tx_hash_near": "BmLNbqK1tLowB6kpAg5cakJuhUkt3QP7nyMkVAHG85BY",
+  "sender": "handover-alpha.testnet",
+  "probe_contract": "handover-alpha-probe.testnet",
+  "path": "handover-check",
+  "payload_hash": "0xef043b276591d41c502c17ac847be83b7200b34dbe4c5b21d3b815cb08974699",
+  "response": {
+    "scheme": "Secp256k1",
+    "big_r": {
+      "affine_point": "020117ba87a5ef9cbb7fdb2e3b040a05a57b8d0564aeb3788e043f2e617c774301"
+    },
+    "s": {
+      "scalar": "505330347eb0477bc43dcf50a2b7db9b73bda164d600bb64a9977281f136d5d8"
+    },
+    "recovery_id": 1
+  },
+  "raw_tx_hex": "0x02f87483aa36a780843b9aca008506fc23ac0082520894000000000000000000000000000000000000dead865af3107a400080c001a00117ba87a5ef9cbb7fdb2e3b040a05a57b8d0564aeb3788e043f2e617c774301a0505330347eb0477bc43dcf50a2b7db9b73bda164d600bb64a9977281f136d5d8",
+  "tx_hash_sepolia": "0x66376196e20f7ce32bfbf4fe997d6a84a21f04c1ae36b51dcac0bd5838c4370c",
+  "latency_seconds": 5.402517849,
+  "total_gas_tgas": 12.909,
+  "deposit_yocto": "1"
+}
