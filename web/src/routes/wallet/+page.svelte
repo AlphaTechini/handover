@@ -47,6 +47,7 @@
 	import Seal from '$lib/ui/Seal.svelte';
 	import SendForm from '$lib/ui/SendForm.svelte';
 	import TokenSendForm from '$lib/ui/TokenSendForm.svelte';
+	import SweepForm from '$lib/ui/SweepForm.svelte';
 	import { formatUnits } from 'viem';
 	import SigLogTable from '$lib/ui/SigLogTable.svelte';
 	import Skeleton from '$lib/ui/Skeleton.svelte';
@@ -769,6 +770,27 @@
 									tokenId={w.tokenId}
 									fromAddress={w.ethAddress}
 									balanceWei={s?.balanceWei ?? null}
+									holdings={holdings.data ?? []}
+									blocked={blockedReason}
+									onsettled={() => {
+										status.load();
+										holdings.load();
+									}}
+								/>
+							</div>
+						</section>
+
+						<section class="card panel" aria-labelledby="sweep-h">
+							<header class="p-head">
+								<div>
+									<h2 id="sweep-h">Send everything</h2>
+									<p class="p-sub">Every listed token, then the ETH that is left, to one address.</p>
+								</div>
+							</header>
+							<div class="p-body">
+								<SweepForm
+									tokenId={w.tokenId}
+									fromAddress={w.ethAddress}
 									holdings={holdings.data ?? []}
 									blocked={blockedReason}
 									onsettled={() => {
