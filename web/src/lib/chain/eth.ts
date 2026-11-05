@@ -5,7 +5,7 @@ import { clampFees, FALLBACK_FEES, isAlreadyKnownError, pickGasLimit, withHeadro
 import type { EthFees, Hex } from './types';
 
 let client: PublicClient | null = null;
-function pc(): PublicClient {
+export function pc(): PublicClient {
 	return (client ??= createPublicClient({ chain: sepolia, transport: http(SEPOLIA_RPC) }) as PublicClient);
 }
 

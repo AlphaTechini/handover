@@ -1,8 +1,10 @@
 //! Ethereum transaction construction and signature assembly.
 //!
-//! Security property: there is exactly ONE kind of transaction this contract can build, a plain
-//! EIP-1559 ETH transfer with empty `input` and empty access list. No public method accepts
-//! calldata or a payload, so an ERC-20 `approve` (or any contract call) can never be signed.
+//! Security property: the contract builds only two kinds of EIP-1559 transaction, both with an
+//! empty access list: a plain ETH transfer (empty `input`), and a value-free token transfer whose
+//! calldata the contract encodes itself (ERC-20 `transfer`, ERC-721 / ERC-1155
+//! `safeTransferFrom` from the wallet). No public method accepts calldata or a payload, so an
+//! `approve`, `setApprovalForAll`, `permit` or any other contract call can never be signed.
 
 use crate::mpc::{K256Signature, SignatureResponse};
 use near_sdk::env;
@@ -25,6 +27,16 @@ pub const MAX_TRANSFER_GAS_LIMIT: u128 = 300_000;
 /// years by setting a dust fee (it would stay a valid pre-signed tx in the log).
 pub const MIN_MAX_FEE_PER_GAS: u128 = 1_000_000_000;
 
+/// Token transfers run token code (and, for ERC-721/1155, the receiver hook), so they get a
+/// higher cap than plain ETH transfers. Still bounded, for the same fee reason.
+pub const MAX_TOKEN_GAS_LIMIT: u128 = 500_000;
+
+/// Selectors of the only token calls the contract ever builds. None of them can grant a right
+/// to anyone: no `approve`, `setApprovalForAll`, `permit` or arbitrary call is reachable.
+pub const ERC20_TRANSFER: [u8; 4] = [0xa9, 0x05, 0x9c, 0xbb]; // transfer(address,uint256)
+pub const ERC721_SAFE_TRANSFER_FROM: [u8; 4] = [0x42, 0x84, 0x2e, 0x0e]; // safeTransferFrom(address,address,uint256)
+pub const ERC1155_SAFE_TRANSFER_FROM: [u8; 4] = [0xf2, 0x42, 0x43, 0x2a]; // safeTransferFrom(address,address,uint256,uint256,bytes)
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransferParams {
     pub to: [u8; 20],
@@ -32,6 +44,8 @@ pub struct TransferParams {
     pub gas_limit: u128,
     pub max_fee_per_gas: u128,
     pub max_priority_fee_per_gas: u128,
+    /// Empty for ETH transfers; otherwise calldata the contract encoded itself (see above).
+    pub data: Vec<u8>,
 }
 
 /// Strict address parse: `0x` + 40 hex chars, either case. Anything else is rejected
@@ -78,29 +92,174 @@ pub fn validate_transfer(
         gas_limit,
         max_fee_per_gas,
         max_priority_fee_per_gas,
+        data: vec![],
     })
 }
 
-/// Build the EIP-1559 plain-transfer transaction. Input and access list are always empty.
-pub fn build_plain_transfer(chain_id: u64, nonce: u64, p: &TransferParams) -> EVMTransaction {
+/// Parses a non-negative decimal integer that fits in 256 bits into big-endian bytes.
+pub fn parse_u256(s: &str) -> Option<[u8; 32]> {
+    if s.is_empty() || s.len() > 78 || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for d in s.bytes() {
+        // out = out * 10 + d
+        let mut carry = u32::from(d - b'0');
+        for byte in out.iter_mut().rev() {
+            let v = u32::from(*byte) * 10 + carry;
+            *byte = (v & 0xff) as u8;
+            carry = v >> 8;
+        }
+        if carry != 0 {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+fn word_address(a: &[u8; 20]) -> [u8; 32] {
+    let mut w = [0u8; 32];
+    w[12..].copy_from_slice(a);
+    w
+}
+
+fn word_u64(n: u64) -> [u8; 32] {
+    let mut w = [0u8; 32];
+    w[24..].copy_from_slice(&n.to_be_bytes());
+    w
+}
+
+/// Which token standard a `request_token_transfer` moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TokenStandard {
+    Erc20,
+    Erc721,
+    Erc1155,
+}
+
+impl TokenStandard {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "erc20" => Some(Self::Erc20),
+            "erc721" => Some(Self::Erc721),
+            "erc1155" => Some(Self::Erc1155),
+            _ => None,
+        }
+    }
+}
+
+/// Validates a token transfer and encodes its calldata. `from` must be the wallet's own address
+/// (the caller passes the pinned address); the transaction carries no ETH.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_token_transfer(
+    standard: TokenStandard,
+    token: &str,
+    from: [u8; 20],
+    to: &str,
+    id: &str,
+    amount: &str,
+    gas_limit: u128,
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
+) -> Result<TransferParams, &'static str> {
+    let token = parse_address(token).ok_or("`token` must be 0x followed by 40 hex characters")?;
+    let to = parse_address(to).ok_or("`to` must be 0x followed by 40 hex characters")?;
+    if token == [0u8; 20] || to == [0u8; 20] {
+        return Err("`token` and `to` must not be the zero address");
+    }
+    if !(MIN_TRANSFER_GAS_LIMIT..=MAX_TOKEN_GAS_LIMIT).contains(&gas_limit) {
+        return Err("gas_limit must be between 21000 and 500000 for token transfers");
+    }
+    // Fee rules are the same as for ETH transfers.
+    validate_transfer(
+        "0x0000000000000000000000000000000000000001",
+        1,
+        MIN_TRANSFER_GAS_LIMIT,
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+    )?;
+    let amount_word = || parse_u256(amount).filter(|w| w.iter().any(|b| *b != 0));
+    let id_word = || parse_u256(id);
+    let mut data = Vec::with_capacity(196);
+    match standard {
+        TokenStandard::Erc20 => {
+            let amount = amount_word().ok_or("amount must be a whole number above 0")?;
+            data.extend_from_slice(&ERC20_TRANSFER);
+            data.extend_from_slice(&word_address(&to));
+            data.extend_from_slice(&amount);
+        }
+        TokenStandard::Erc721 => {
+            let id = id_word().ok_or("id must be a whole number")?;
+            data.extend_from_slice(&ERC721_SAFE_TRANSFER_FROM);
+            data.extend_from_slice(&word_address(&from));
+            data.extend_from_slice(&word_address(&to));
+            data.extend_from_slice(&id);
+        }
+        TokenStandard::Erc1155 => {
+            let id = id_word().ok_or("id must be a whole number")?;
+            let amount = amount_word().ok_or("amount must be a whole number above 0")?;
+            data.extend_from_slice(&ERC1155_SAFE_TRANSFER_FROM);
+            data.extend_from_slice(&word_address(&from));
+            data.extend_from_slice(&word_address(&to));
+            data.extend_from_slice(&id);
+            data.extend_from_slice(&amount);
+            data.extend_from_slice(&word_u64(0xa0)); // offset of the empty `bytes data`
+            data.extend_from_slice(&word_u64(0)); // its length
+        }
+    }
+    Ok(TransferParams {
+        to: token,
+        value_wei: 0,
+        gas_limit,
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+        data,
+    })
+}
+
+/// Build the EIP-1559 transaction. The access list is always empty; `input` is empty for ETH
+/// transfers and otherwise one of the contract-encoded token calls.
+pub fn build_transfer(chain_id: u64, nonce: u64, p: &TransferParams) -> EVMTransaction {
     let tx = TransactionBuilder::new::<EVM>()
         .chain_id(chain_id)
         .nonce(nonce)
         .to(p.to)
         .value(p.value_wei)
-        .input(vec![])
+        .input(p.data.clone())
         .gas_limit(p.gas_limit)
         .max_fee_per_gas(p.max_fee_per_gas)
         .max_priority_fee_per_gas(p.max_priority_fee_per_gas)
         .access_list(vec![])
         .build();
-    debug_assert!(is_plain_transfer(&tx));
+    debug_assert!(is_allowed_transfer(&tx));
     tx
+}
+
+/// Build a plain ETH transfer (empty input).
+#[cfg(test)]
+pub fn build_plain_transfer(chain_id: u64, nonce: u64, p: &TransferParams) -> EVMTransaction {
+    debug_assert!(p.data.is_empty());
+    build_transfer(chain_id, nonce, p)
 }
 
 /// True only for a transaction that moves ETH and carries no calldata.
 pub fn is_plain_transfer(tx: &EVMTransaction) -> bool {
     tx.input.is_empty() && tx.access_list.is_empty() && tx.to.is_some()
+}
+
+/// True for a plain ETH transfer or a value-free token transfer whose calldata is exactly one of
+/// the three allowed encodings (right selector, right length).
+pub fn is_allowed_transfer(tx: &EVMTransaction) -> bool {
+    if is_plain_transfer(tx) {
+        return true;
+    }
+    if !tx.access_list.is_empty() || tx.to.is_none() || tx.value != 0 || tx.input.len() < 4 {
+        return false;
+    }
+    let (sel, len) = (&tx.input[..4], tx.input.len());
+    (sel == ERC20_TRANSFER && len == 4 + 64)
+        || (sel == ERC721_SAFE_TRANSFER_FROM && len == 4 + 96)
+        || (sel == ERC1155_SAFE_TRANSFER_FROM && len == 4 + 192)
 }
 
 /// keccak256 of the EIP-2718 signing bytes (`0x02 || rlp([...])`): the digest MPC signs.

@@ -703,6 +703,7 @@ fn matches_independent_viem_vector() {
         gas_limit: 21_000,
         max_fee_per_gas: 30 * GWEI,
         max_priority_fee_per_gas: GWEI,
+        data: vec![],
     };
     let t = tx::build_plain_transfer(SEPOLIA_CHAIN_ID, 0, &p);
     assert_eq!(
@@ -1122,6 +1123,7 @@ fn retry_reserved_rejected_while_listed() {
         requested_at_ns: 0,
         requested_at_block: 0,
         attempts: 1,
+        data: vec![],
     });
     set(&alice(), FEE_OK);
     c.retry_reserved("0".into()).detach();
@@ -1814,6 +1816,7 @@ fn pending_call_blocks_retry_reserved() {
         requested_at_ns: 0,
         requested_at_block: 0,
         attempts: 1,
+        data: vec![],
     });
     set(&m, FEE_OK);
     c.retry_reserved("0".into()).detach();

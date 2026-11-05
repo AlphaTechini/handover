@@ -20,6 +20,7 @@ cargo near build non-reproducible-wasm --locked --out-dir ../res
 | `new(mpc_contract_id, chain_id)` | init, `#[private]` | - | only the contract account can initialise (deploy + init in one batch); testnet: `v1.signer-prod.testnet`, `11155111` |
 | `nft_mint()` | anyone | >= 0.05 NEAR (`mint_fee`) | sequential ids `"0"`, `"1"`; keeps measured storage + 1500 bytes prepaid per-token buffer (0.015 NEAR), refunds the rest |
 | `request_transfer(token_id, to, value_wei, gas_limit, max_fee_per_gas, max_priority_fee_per_gas)` | owner | > 0.01 NEAR (`sign_fee` + 1 yocto at least) | attach 300 Tgas; the contract keeps `sign_fee`, the REST goes to MPC `sign`; no refund |
+| `request_token_transfer(token_id, standard, token, to, id, amount, gas_limit, max_fee_per_gas, max_priority_fee_per_gas)` | owner | same as `request_transfer` | v2: `standard` is `erc20`, `erc721` or `erc1155`; the contract encodes ERC-20 `transfer`, ERC-721 / ERC-1155 `safeTransferFrom` from the wallet's pinned address (one ETH transfer first); `gas_limit` 21000 to 500000 |
 | `retry_reserved(token_id)` | owner | > 0.01 NEAR | re-requests a signature for the identical reserved transaction; same deposit rule |
 | `release_stuck(token_id)` | owner | exactly 1 yocto | only while `in_flight` and block height > `reserved.requested_at_block` + `release_after_blocks` (300) |
 | `on_signed(token_id, nonce)` | contract only | - | MPC callback; reads the raw promise result itself, never panics, returns `SignedTxView` or null |
@@ -75,7 +76,7 @@ static 50 Tgas plus unused gas (weight 1); `on_signed` gets a static 30 Tgas (we
 | `release_stuck` (owner, 1 yocto, > 300 blocks after the latest `sign` call, only while in flight) clears `in_flight` and keeps the reservation | recovery if the callback never ran (e.g. out of gas); identical to a failed attempt, so no signature can be forgotten; follow with `retry_reserved` |
 | `new` is `#[private]` | no one can front-run initialisation |
 | Nonces strictly sequential; a failed call never increments `next_nonce` | the log is dense, so `chain nonce == next_nonce` proves no signed transaction is outstanding |
-| Only plain ETH transfers (empty input, empty access list) | closes standing approvals (ERC-20 `approve` etc.) |
+| Only plain ETH transfers (empty input, empty access list) and, in v2, three contract-encoded token transfers (`is_allowed_transfer`) | closes standing approvals: no `approve`, `setApprovalForAll`, `permit` or arbitrary call can be signed |
 | `r` and `s` stripped of leading zeros | canonical RLP, nodes accept the transaction |
 | `buy` pays the seller exactly `price`, moves the NFT and clears approvals in the same call | atomic payment |
 | `list` / `delist` require exactly 1 yocto | full-access-key confirmation |

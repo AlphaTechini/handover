@@ -96,6 +96,19 @@ export { blocksUntilRelease, canReleaseStuck };
 
 /** `gasLimit` defaults to 21000; pass the result of `transferGasLimit` for recipients that run code. */
 export interface TransferRequest { tokenId: string; to: `0x${string}`; valueWei: bigint; gasLimit?: bigint; maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; }
+export type TokenStandard = 'erc20' | 'erc721' | 'erc1155';
+/** v2: a token transfer the contract encodes itself. `id` is ignored for ERC-20, `amount` for ERC-721. */
+export interface TokenTransferRequest {
+	tokenId: string;
+	standard: TokenStandard;
+	token: `0x${string}`;
+	to: `0x${string}`;
+	id: bigint;
+	amount: bigint;
+	gasLimit: bigint;
+	maxFeePerGas?: bigint;
+	maxPriorityFeePerGas?: bigint;
+}
 
 const POLL_INTERVAL_MS = 3_000;
 const POLL_TIMEOUT_MS = 90_000;
@@ -155,6 +168,35 @@ export async function requestTransfer(req: TransferRequest): Promise<SignedTx> {
 			to: req.to.toLowerCase(),
 			value_wei: req.valueWei.toString(),
 			gas_limit: (req.gasLimit ?? MIN_GAS_LIMIT).toString(),
+			max_fee_per_gas: maxFeePerGas.toString(),
+			max_priority_fee_per_gas: maxPriorityFeePerGas.toString()
+		},
+		before.nextNonce
+	);
+}
+
+/** v2: asks the contract to sign a token transfer it encodes itself; resolves to the recorded signed tx */
+export async function requestTokenTransfer(req: TokenTransferRequest): Promise<SignedTx> {
+	let { maxFeePerGas, maxPriorityFeePerGas } = req;
+	if (maxFeePerGas === undefined || maxPriorityFeePerGas === undefined) {
+		const fees = await getFees();
+		maxFeePerGas ??= fees.maxFeePerGas;
+		maxPriorityFeePerGas ??= fees.maxPriorityFeePerGas;
+	}
+	({ maxFeePerGas, maxPriorityFeePerGas } = clampFees({ maxFeePerGas, maxPriorityFeePerGas }));
+	const before = await getWallet(req.tokenId);
+	if (!before) throw new Error(`Wallet ${req.tokenId} does not exist`);
+	return signCall(
+		req.tokenId,
+		'request_token_transfer',
+		{
+			token_id: req.tokenId,
+			standard: req.standard,
+			token: req.token.toLowerCase(),
+			to: req.to.toLowerCase(),
+			id: req.id.toString(),
+			amount: req.amount.toString(),
+			gas_limit: req.gasLimit.toString(),
 			max_fee_per_gas: maxFeePerGas.toString(),
 			max_priority_fee_per_gas: maxPriorityFeePerGas.toString()
 		},

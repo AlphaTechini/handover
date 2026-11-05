@@ -41,3 +41,7 @@ Files here: `handover.wasm`, `handover.wasm.sha256`, `handover_abi.json` (ABI, a
 the wasm).
 
 Verify: `cd contracts/res && sha256sum -c handover.wasm.sha256`
+
+## v2 build (handover-v2-alpha.testnet)
+
+`contracts/res/v2/handover.wasm`, 327837 bytes, SHA-256 `b2a43c5e99f532914a1c5005f9adaab8289d68a5de123383cf649e9feade00c7` (base58 `D2LpdVQXds9qea4B19ba835djiwimDxQWCUgNZXz4ud8`, the code hash deployed at `handover-v2-alpha.testnet`). Same toolchain and command as above with `--out-dir ../res/v2`; adds `request_token_transfer`. The v1 wasm and its hash in this folder are unchanged.

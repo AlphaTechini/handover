@@ -78,6 +78,8 @@ Accounts: seller `handover-alpha.testnet`, buyer `handover-alpha-buyer.testnet`,
 | [`snapshots/token-1-5-buyer-spent.json`](snapshots/token-1-5-buyer-spent.json) | After the buyer's own transfer (nonce 1) |
 | [`demo-run-2026-11-05.md`](demo-run-2026-11-05.md) | The recorded demo on token 2: every NEAR and Sepolia transaction, including the caught pre-signed transfer and the old owner's failed request |
 | [`snapshots/token-2-demo-final.json`](snapshots/token-2-demo-final.json) | Token 2 after the demo: 3 signatures issued, Sepolia nonce 3, `clean` |
+| [`v2-run-2026-11-05.md`](v2-run-2026-11-05.md) | v2 (`handover-v2-alpha.testnet`): ERC-20, ERC-721 and ERC-1155 tokens moved by the seller and, after a sale, by the buyer; the old owner refused; one token send through the web app |
+| [`snapshots/v2-token-0-final.json`](snapshots/v2-token-0-final.json) | v2 wallet #0 after the run: 6 signatures issued, Sepolia nonce 6, `clean` |
 | [`access-keys.txt`](access-keys.txt) | `view_access_key_list` for `handover.handover-alpha.testnet` after the lock: `"keys":[]` (key deleted in tx `4NMiwSBFLKPrZkqzuDbnGmfNey1Whew1vRYQKzEEDsqW`) |
 
 Token 1 was funded from token 0's wallet (Sepolia tx

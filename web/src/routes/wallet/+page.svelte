@@ -14,6 +14,7 @@
 		formatEth,
 		formatNear,
 		getConfig,
+		getTokenHoldings,
 		getWallet,
 		getWalletStatus,
 		HANDOVER_CONTRACT,
@@ -32,6 +33,7 @@
 		type ContractConfig,
 		type SignedTx,
 		type Verdict,
+		type TokenHolding,
 		type WalletStatus
 	} from '$lib/chain';
 	import AddressChip from '$lib/ui/AddressChip.svelte';
@@ -44,6 +46,8 @@
 	import NonceMeter from '$lib/ui/NonceMeter.svelte';
 	import Seal from '$lib/ui/Seal.svelte';
 	import SendForm from '$lib/ui/SendForm.svelte';
+	import TokenSendForm from '$lib/ui/TokenSendForm.svelte';
+	import { formatUnits } from 'viem';
 	import SigLogTable from '$lib/ui/SigLogTable.svelte';
 	import Skeleton from '$lib/ui/Skeleton.svelte';
 	import VerdictBadge from '$lib/ui/VerdictBadge.svelte';
@@ -71,6 +75,14 @@
 		return st as WalletStatus;
 	});
 	const address = new Resource(() => walletAddress(id!));
+	// v2: tokens the wallet holds, from the public token index (shown to buyers and the owner).
+	const holdings = new Resource<TokenHolding[]>(async () => {
+		const a = status.data?.address ?? address.data;
+		return a ? getTokenHoldings(a) : [];
+	});
+	$effect(() => {
+		if (status.data?.address || address.data) untrack(() => holdings.load());
+	});
 
 	let now = $state(Date.now());
 
@@ -464,12 +476,38 @@
 			</div>
 		</header>
 
-		<div class="eth-only">
-			<Callout tone="neutral" title="ETH only">
-				Only ETH can leave this wallet. Tokens or NFTs sent to its address can never be moved: this contract only signs plain ETH
-				transfers.
-			</Callout>
-		</div>
+		<section class="card panel holdings" aria-labelledby="hold-h">
+			<header class="p-head">
+				<div>
+					<h2 id="hold-h">Tokens in this wallet</h2>
+					<p class="p-sub">
+						ETH, ERC-20, ERC-721 and ERC-1155 tokens all move with the NFT. The contract only signs transfers out of the wallet,
+						never an approval. Listed from the public Sepolia token index.
+					</p>
+				</div>
+			</header>
+			<div class="p-body">
+				{#if holdings.data?.length}
+					<ul class="hold-list">
+						{#each holdings.data as h (h.token + (h.id ?? ''))}
+							<li>
+								<span class="mono"
+									>{h.standard === 'erc20' ? formatUnits(h.amount, h.decimals) : h.standard === 'erc1155' ? h.amount.toString() + ' ×' : ''}
+									{h.symbol || h.name || 'token'}{h.id !== null ? ' #' + h.id : ''}</span
+								>
+								<span class="small muted">{h.standard === 'erc20' ? 'ERC-20' : h.standard === 'erc721' ? 'ERC-721' : 'ERC-1155'}</span>
+							</li>
+						{/each}
+					</ul>
+				{:else if holdings.error}
+					<p class="small muted">Token index unavailable right now.</p>
+				{:else if holdings.data}
+					<p class="small muted">No tokens besides ETH.</p>
+				{:else}
+					<p class="small muted">Loading tokens…</p>
+				{/if}
+			</div>
+		</section>
 
 		<div class="layout">
 			<!-- ============ Left: verification + log ============ -->
@@ -719,6 +757,28 @@
 							</div>
 						</section>
 
+						<section class="card panel" aria-labelledby="tok-h">
+							<header class="p-head">
+								<div>
+									<h2 id="tok-h">Send a token</h2>
+									<p class="p-sub">ERC-20, ERC-721 or ERC-1155, signed by the NEAR MPC network for you as the NFT's owner.</p>
+								</div>
+							</header>
+							<div class="p-body">
+								<TokenSendForm
+									tokenId={w.tokenId}
+									fromAddress={w.ethAddress}
+									balanceWei={s?.balanceWei ?? null}
+									holdings={holdings.data ?? []}
+									blocked={blockedReason}
+									onsettled={() => {
+										status.load();
+										holdings.load();
+									}}
+								/>
+							</div>
+						</section>
+
 						<section class="card panel" aria-labelledby="list-h">
 							<header class="p-head">
 								<div>
@@ -768,7 +828,7 @@
 							<header class="p-head">
 								<div>
 									<h2 id="buy-h">Buy this wallet</h2>
-									<p class="p-sub">The NFT, the address and its ETH.</p>
+									<p class="p-sub">The NFT, the address, its ETH and its tokens.</p>
 								</div>
 							</header>
 							<div class="p-body stack">
@@ -1039,8 +1099,20 @@
 	}
 
 	/* layout */
-	.eth-only {
+	.holdings {
 		margin-bottom: 24px;
+	}
+	.hold-list {
+		display: grid;
+		gap: 8px;
+		list-style: none;
+		padding: 0;
+		margin: 0;
+	}
+	.hold-list li {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
 	}
 	.layout {
 		display: grid;

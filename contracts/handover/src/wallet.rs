@@ -30,6 +30,7 @@ impl ReservedTx {
             gas_limit: self.gas_limit,
             max_fee_per_gas: self.max_fee_per_gas,
             max_priority_fee_per_gas: self.max_priority_fee_per_gas,
+            data: self.data.clone(),
         }
     }
 }
@@ -65,46 +66,53 @@ impl Handover {
             max_priority_fee_per_gas.0,
         )
         .unwrap_or_else(|e| env::panic_str(e));
+        self.reserve_and_sign(token_id, owner, params)
+    }
 
-        self.assert_can_sign(&token_id);
-        require!(
-            self.wallet(&token_id).reserved.is_none(),
-            "A reserved transaction is pending: call retry_reserved"
-        );
-        let mpc_deposit = Self::mpc_deposit();
-
-        let chain_id = self.chain_id;
-        let wallet = self.wallet_mut(&token_id);
-        let nonce = wallet.next_nonce;
-        let built = tx::build_plain_transfer(chain_id, nonce, &params);
-        require!(
-            tx::is_plain_transfer(&built),
-            "Only plain transfers can be signed"
-        );
-        let payload_hash = tx::signing_hash(&built);
-        wallet.in_flight = true;
-        wallet.reserved = Some(ReservedTx {
-            nonce,
-            to: params.to,
-            value_wei: params.value_wei,
-            gas_limit: params.gas_limit,
-            max_fee_per_gas: params.max_fee_per_gas,
-            max_priority_fee_per_gas: params.max_priority_fee_per_gas,
-            payload_hash,
-            requested_at_ns: env::block_timestamp(),
-            requested_at_block: env::block_height(),
-            attempts: 1,
-        });
-        events::sign_requested(
-            &token_id,
-            &owner,
-            nonce,
-            &params.to,
-            params.value_wei,
-            &payload_hash,
-            1,
-        );
-        self.sign_promise(&token_id, nonce, &payload_hash, mpc_deposit)
+    /// Ask MPC to sign a token transfer out of this token's wallet. Owner only; same deposit and
+    /// gas rules as `request_transfer`.
+    ///
+    /// `standard` is "erc20", "erc721" or "erc1155". The contract encodes the calldata itself:
+    /// ERC-20 `transfer(to, amount)`, ERC-721 `safeTransferFrom(wallet, to, id)`, ERC-1155
+    /// `safeTransferFrom(wallet, to, id, amount, "")`. `id` and `amount` are decimal strings
+    /// (uint256); `id` is ignored for ERC-20 and `amount` for ERC-721. The wallet must already
+    /// have a pinned address (its first signature), which is used as `from`.
+    #[payable]
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_token_transfer(
+        &mut self,
+        token_id: TokenId,
+        standard: String,
+        token: String,
+        to: String,
+        id: String,
+        amount: String,
+        gas_limit: U128,
+        max_fee_per_gas: U128,
+        max_priority_fee_per_gas: U128,
+    ) -> Promise {
+        let owner = self.require_owner(&token_id);
+        self.assert_no_transfer_call(&token_id);
+        let standard = tx::TokenStandard::parse(&standard)
+            .unwrap_or_else(|| env::panic_str("standard must be erc20, erc721 or erc1155"));
+        let Some(from) = self.wallet(&token_id).eth_address else {
+            env::panic_str(
+                "Send one ETH transfer first: the wallet address is pinned by its first signature",
+            )
+        };
+        let params = tx::validate_token_transfer(
+            standard,
+            &token,
+            from,
+            &to,
+            &id,
+            &amount,
+            gas_limit.0,
+            max_fee_per_gas.0,
+            max_priority_fee_per_gas.0,
+        )
+        .unwrap_or_else(|e| env::panic_str(e));
+        self.reserve_and_sign(token_id, owner, params)
     }
 
     /// Re-request a signature for the exact transaction reserved by an earlier attempt whose
@@ -127,7 +135,7 @@ impl Handover {
         let Some(reserved) = wallet.reserved.as_mut() else {
             env::panic_str("Nothing is reserved");
         };
-        let built = tx::build_plain_transfer(chain_id, reserved.nonce, &reserved.params());
+        let built = tx::build_transfer(chain_id, reserved.nonce, &reserved.params());
         require!(
             tx::signing_hash(&built) == reserved.payload_hash,
             "Reserved payload does not match its hash"
@@ -265,6 +273,56 @@ impl Handover {
             )
     }
 
+    /// Shared tail of `request_transfer` / `request_token_transfer`: reserve the exact transaction
+    /// for the next nonce, mark the token in flight, and ask MPC to sign it.
+    fn reserve_and_sign(
+        &mut self,
+        token_id: TokenId,
+        owner: near_sdk::AccountId,
+        params: TransferParams,
+    ) -> Promise {
+        self.assert_can_sign(&token_id);
+        require!(
+            self.wallet(&token_id).reserved.is_none(),
+            "A reserved transaction is pending: call retry_reserved"
+        );
+        let mpc_deposit = Self::mpc_deposit();
+
+        let chain_id = self.chain_id;
+        let wallet = self.wallet_mut(&token_id);
+        let nonce = wallet.next_nonce;
+        let built = tx::build_transfer(chain_id, nonce, &params);
+        require!(
+            tx::is_allowed_transfer(&built),
+            "Only plain transfers and token transfers can be signed"
+        );
+        let payload_hash = tx::signing_hash(&built);
+        wallet.in_flight = true;
+        wallet.reserved = Some(ReservedTx {
+            nonce,
+            to: params.to,
+            value_wei: params.value_wei,
+            gas_limit: params.gas_limit,
+            max_fee_per_gas: params.max_fee_per_gas,
+            max_priority_fee_per_gas: params.max_priority_fee_per_gas,
+            payload_hash,
+            requested_at_ns: env::block_timestamp(),
+            requested_at_block: env::block_height(),
+            attempts: 1,
+            data: params.data.clone(),
+        });
+        events::sign_requested(
+            &token_id,
+            &owner,
+            nonce,
+            &params.to,
+            params.value_wei,
+            &payload_hash,
+            1,
+        );
+        self.sign_promise(&token_id, nonce, &payload_hash, mpc_deposit)
+    }
+
     /// Success path. Returns the reason string for any failure.
     fn finish_signing(
         &mut self,
@@ -282,7 +340,7 @@ impl Handover {
         let response = result?;
         let sig = tx::parse_response(&response)?;
         // Rebuild the transaction from the reservation; never from callback data.
-        let built = tx::build_plain_transfer(chain_id, nonce, &reserved.params());
+        let built = tx::build_transfer(chain_id, nonce, &reserved.params());
         let hash = tx::signing_hash(&built);
         if hash != reserved.payload_hash {
             return Err("reserved payload hash mismatch");

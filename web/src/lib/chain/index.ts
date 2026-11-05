@@ -5,6 +5,7 @@ export * from './config';
 export * from './wallet.svelte';
 export * from './handover';
 export * from './eth';
+export * from './tokens';
 export * from './address';
 export * from './status';
 export * from './format';

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { etherscanTx, formatEth, nsToDate, shortHex, type SignedTx } from '$lib/chain';
+	import { describeTokenCall, etherscanTx, formatEth, nsToDate, shortHex, type SignedTx } from '$lib/chain';
 	import Badge from './Badge.svelte';
 	import Button from './Button.svelte';
 	import CopyButton from './CopyButton.svelte';
@@ -60,12 +60,26 @@
 			{#each rows as tx (tx.nonce)}
 				{@const st = status(tx)}
 				{@const d = safeDate(tx.signedAtNs)}
+				{@const tc = describeTokenCall(tx.rawSignedTxHex)}
 				<tr class={st}>
 					<td class="c-nonce" data-label="Nonce"><span class="mono nonce">{tx.nonce}</span></td>
 					<td data-label="To">
-						<span class="mono addr" title={tx.to}>{shortHex(tx.to, 4)}</span>
+						{#if tc}
+							<span class="mono addr" title={tc.recipient}>{shortHex(tc.recipient, 4)}</span>
+						{:else}
+							<span class="mono addr" title={tx.to}>{shortHex(tx.to, 4)}</span>
+						{/if}
 					</td>
-					<td class="num" data-label="Value"><span class="mono">{safeEth(tx.valueWei)}</span> <span class="unit">ETH</span></td>
+					<td class="num" data-label="Value">
+						{#if tc}
+							<span class="mono" title="Token contract {tc.token}"
+								>{tc.standard === 'erc721' ? `#${tc.id}` : tc.standard === 'erc1155' ? `${tc.amount} × #${tc.id}` : tc.amount.toString()}</span
+							>
+							<span class="unit">{tc.standard === 'erc20' ? 'ERC-20 units' : tc.standard === 'erc721' ? 'ERC-721' : 'ERC-1155'}</span>
+						{:else}
+							<span class="mono">{safeEth(tx.valueWei)}</span> <span class="unit">ETH</span>
+						{/if}
+					</td>
 					<td data-label="Tx hash">
 						<span class="hash">
 							<a class="mono link-plain" href={etherscanTx(tx.txHash)} target="_blank" rel="noreferrer noopener" title={tx.txHash}

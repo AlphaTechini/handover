@@ -29,6 +29,8 @@ pub struct ReservedTx {
     pub requested_at_block: u64,
     /// Number of MPC `sign` calls made for this reservation (1 = first attempt).
     pub attempts: u32,
+    /// Contract-encoded token calldata; empty for ETH transfers.
+    pub data: Vec<u8>,
 }
 
 #[near(serializers = [borsh])]
@@ -107,6 +109,7 @@ pub struct ReservedTxView {
     pub requested_at_ns: U64,
     pub requested_at_block: u64,
     pub attempts: u32,
+    pub data_hex: String,
 }
 
 #[near(serializers = [json])]
@@ -156,6 +159,7 @@ impl ReservedTx {
             requested_at_ns: U64(self.requested_at_ns),
             requested_at_block: self.requested_at_block,
             attempts: self.attempts,
+            data_hex: hex0x(&self.data),
         }
     }
 }
