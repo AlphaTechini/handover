@@ -1,7 +1,7 @@
 // Token side of v2: calldata encoding for gas estimation, gas limits, ERC-20 metadata, and the
 // token holdings of a wallet. Holdings come from Blockscout's public API (keyless, CORS open);
 // it is the only module that knows that provider.
-import { decodeFunctionData, encodeFunctionData, parseAbi, parseTransaction, type Hex } from 'viem';
+import { decodeFunctionData, encodeFunctionData, formatUnits, parseAbi, parseTransaction, type Hex } from 'viem';
 import { pc } from './eth';
 import { MIN_GAS_LIMIT } from './fees';
 import type { TokenStandard } from './handover';
@@ -68,6 +68,14 @@ export interface TokenHolding {
 const BLOCKSCOUT = 'https://eth-sepolia.blockscout.com/api/v2';
 
 const STANDARDS: Record<string, TokenStandard> = { 'ERC-20': 'erc20', 'ERC-721': 'erc721', 'ERC-1155': 'erc1155' };
+
+/** Short human label for a holding, e.g. "50 HTT", "HTN #0", "2 × #7". */
+export function formatHolding(h: TokenHolding): string {
+	const name = h.symbol || h.name || 'token';
+	if (h.standard === 'erc20') return `${formatUnits(h.amount, h.decimals)} ${name}`;
+	if (h.standard === 'erc721') return `${name} #${h.id}`;
+	return `${h.amount} × ${name} #${h.id}`;
+}
 
 export interface TokenCall {
 	standard: TokenStandard;

@@ -1,5 +1,15 @@
 <script lang="ts">
-	import { formatEth, formatNear, getWalletStatus, shortHex, type Listing, type WalletStatus } from '$lib/chain';
+	import {
+		formatEth,
+		formatHolding,
+		formatNear,
+		getTokenHoldings,
+		getWalletStatus,
+		shortHex,
+		type Listing,
+		type TokenHolding,
+		type WalletStatus
+	} from '$lib/chain';
 	import { onMount } from 'svelte';
 	import Badge from './Badge.svelte';
 	import Icon from './Icon.svelte';
@@ -24,9 +34,13 @@
 	const status = new Resource(() => getWalletStatus(tokenId));
 	let el: HTMLAnchorElement | undefined = $state();
 
+	// Tokens at the wallet address, shown on market cards so buyers see what a sale includes.
+	let tokens = $state<TokenHolding[]>([]);
+
 	async function load() {
 		const s = await status.load();
 		onstatus?.(tokenId, s ?? null);
+		if (s && context === 'market') getTokenHoldings(s.address).then((t) => (tokens = t)).catch(() => {});
 	}
 
 	onMount(() => {
@@ -102,6 +116,13 @@
 			{/if}
 		</dl>
 
+		{#if context === 'market' && tokens.length}
+			<p class="incl">
+				<span class="secondary">Includes</span>
+				<span class="mono">{tokens.slice(0, 3).map(formatHolding).join(', ')}{tokens.length > 3 ? `, +${tokens.length - 3} more` : ''}</span>
+			</p>
+		{/if}
+
 		{#if listed && context === 'market'}
 			<div class="price">
 				<span class="p-amount"><span class="tnum">{formatNear(listed.priceYocto)}</span> <span class="unit">NEAR</span></span>
@@ -112,6 +133,13 @@
 </a>
 
 <style>
+	.incl {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		font-size: var(--text-xs);
+		color: var(--text);
+	}
 	.wcard {
 		display: flex;
 		flex-direction: column;

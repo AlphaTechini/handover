@@ -14,6 +14,7 @@
 		formatEth,
 		formatNear,
 		getConfig,
+		formatHolding,
 		getTokenHoldings,
 		getWallet,
 		getWalletStatus,
@@ -861,6 +862,19 @@
 									Sold by <span class="mono">{listing.sellerId}</span>
 								</p>
 
+								<div class="incl">
+									<p class="incl-t">Included in this sale</p>
+									<ul>
+										<li class="mono">{s ? formatEth(s.balanceWei, 6) : '…'} ETH</li>
+										{#each holdings.data ?? [] as h (h.token + (h.id ?? ''))}
+											<li class="mono">{formatHolding(h)}</li>
+										{/each}
+									</ul>
+									<p class="small muted">
+										Everything at the wallet's address goes to the buyer with the NFT, including tokens the public index has not listed yet.
+									</p>
+								</div>
+
 								<ol class="buy-steps">
 									<li class:done={checkOk}>
 										<span class="bs-n">{#if checkOk}<Icon name="check" size={12} stroke={2.75} />{:else}1{/if}</span>
@@ -1121,6 +1135,33 @@
 	}
 
 	/* layout */
+	.incl {
+		display: grid;
+		gap: 6px;
+		padding: 12px;
+		border-radius: var(--radius-md);
+		background: var(--surface-2);
+		border: 1px solid var(--border);
+	}
+	.incl-t {
+		font-weight: 600;
+		font-size: var(--text-sm);
+	}
+	.incl ul {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		font-size: var(--text-xs);
+	}
+	.incl li {
+		padding: 2px 8px;
+		border-radius: 999px;
+		border: 1px solid var(--border-strong);
+		color: var(--text);
+	}
 	.holdings {
 		margin-bottom: 24px;
 	}
