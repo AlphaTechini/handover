@@ -72,7 +72,7 @@
 			<span class="eyebrow"><span class="led" aria-hidden="true"></span>NEAR Chain Signatures · Sepolia testnet</span>
 			<h1>Buy a wallet,<br />not a promise.</h1>
 			<p class="lede">
-				Handover is an NFT that owns its own Ethereum wallet. Sell it and the buyer gets the address and everything in it,
+				Handover is an NFT that owns its own Ethereum wallet. Sell it and the buyer gets the address and its ETH,
 				with public proof that the seller kept no way back in.
 			</p>
 			<div class="ctas">

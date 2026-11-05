@@ -170,7 +170,8 @@
 					<div>
 						<h2>Fund this wallet</h2>
 						<p class="secondary">
-							Send Sepolia ETH to the address below. It belongs to the NFT: whoever owns the NFT controls it.
+							Send Sepolia ETH to the address below. It belongs to the NFT: whoever owns the NFT controls it. Send ETH only:
+							tokens or NFTs sent here can never be moved.
 						</p>
 					</div>
 					{#if address}

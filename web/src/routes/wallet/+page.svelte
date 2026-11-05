@@ -464,6 +464,13 @@
 			</div>
 		</header>
 
+		<div class="eth-only">
+			<Callout tone="neutral" title="ETH only">
+				Only ETH can leave this wallet. Tokens or NFTs sent to its address can never be moved: this contract only signs plain ETH
+				transfers.
+			</Callout>
+		</div>
+
 		<div class="layout">
 			<!-- ============ Left: verification + log ============ -->
 			<div class="main-col">
@@ -761,7 +768,7 @@
 							<header class="p-head">
 								<div>
 									<h2 id="buy-h">Buy this wallet</h2>
-									<p class="p-sub">The NFT, the address and everything in it.</p>
+									<p class="p-sub">The NFT, the address and its ETH.</p>
 								</div>
 							</header>
 							<div class="p-body stack">
@@ -1032,6 +1039,9 @@
 	}
 
 	/* layout */
+	.eth-only {
+		margin-bottom: 24px;
+	}
 	.layout {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) 360px;

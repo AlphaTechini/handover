@@ -9,7 +9,7 @@ This PRD is the single source of truth for the coding agent building Handover. R
 
 ## 1. One-liner
 
-**Handover is an NFT that owns its own Ethereum wallet, and a sale flow that lets you buy that wallet, with everything in it, without having to trust the seller.**
+**Handover is an NFT that owns its own Ethereum wallet, and a sale flow that lets you buy that wallet, and its ETH, without having to trust the seller (tokens follow in v2, see the README roadmap).**
 
 Who it's for: anyone who needs to hand over a whole wallet rather than move assets one by one. Examples: selling a position that is tied to an address (tokens vesting to that address, locked or illiquid balances), handing a project or treasury wallet to a new team, or gifting a funded wallet. The buyer gets the wallet itself, not a promise.
 

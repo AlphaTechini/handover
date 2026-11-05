@@ -1,8 +1,8 @@
 # Handover
 
-**An NFT that owns its own Ethereum wallet, and a sale flow that lets you buy that wallet, with everything in it, without trusting the seller.**
+**An NFT that owns its own Ethereum wallet, and a sale flow that lets you buy that wallet and its ETH without trusting the seller.**
 
-Who it is for: anyone who needs to hand over a whole wallet instead of moving assets one by one. Examples: handing a project or treasury wallet to a new team, selling a funded wallet, or gifting one. The buyer gets the wallet itself, not a promise. Today a Handover wallet holds and sends ETH only; ERC-20 tokens (for example tokens vesting to the address) are on the roadmap, not built.
+Who it is for: anyone who needs to hand over a whole wallet instead of moving assets one by one. Examples: handing a project or treasury wallet to a new team, selling a funded wallet, or gifting one. The buyer gets the wallet itself, not a promise. Today (v1, the deployed and locked contract) only ETH can leave a Handover wallet: tokens or NFTs sent to one can never be moved, because the contract only signs plain ETH transfers. v2, in progress at a new contract account, adds contract-built `transfer` calls for ERC-20, ERC-721 and ERC-1155 tokens (never approvals), so a buyer gets the tokens too ([Roadmap](#roadmap)).
 
 Status: **deployed and locked on NEAR testnet** at [`handover.handover-alpha.testnet`](https://testnet.nearblocks.io/address/handover.handover-alpha.testnet) (no access keys left, so the code can never change: [`evidence/access-keys.txt`](evidence/access-keys.txt)), with a hosted demo at **https://handover-blush.vercel.app**. A full sale (mint, fund, spend, list, clean check, buy, buyer spends, old owner refused) ran on NEAR testnet and Ethereum Sepolia, and its proof is in [`evidence/`](evidence/README.md). The recorded demo ran the same flow again through the web app, including a caught pre-signed transaction: [`evidence/demo-run-2026-11-05.md`](evidence/demo-run-2026-11-05.md). Testnets only.
 
@@ -146,7 +146,7 @@ Security-hardening pass (fixes F0 to F8, see section 14 "Independent review"):
 - **Deployed and locked on testnet.** The contract runs at `handover.handover-alpha.testnet` and the evidence run is committed in [`evidence/`](evidence/README.md). Its full-access key was deleted after the demo recording ([`evidence/access-keys.txt`](evidence/access-keys.txt)), so nobody can change the code or withdraw its NEAR balance.
 - **Contract unit tests use a stand-in for MPC.** They feed the callback a signature made with a throwaway test key. They prove the contract's logic and encoding. That the real MPC contract answers in this shape is proven separately by capability check 2 and by the live evidence run.
 - **Synthetic fixtures.** The snapshots in `packages/cleancheck/test/fixtures/` are hand-made and labelled `SYNTHETIC` in their `note` and in the CLI output. They are not chain data.
-- **No ERC-20.** Only ETH transfers can be signed. ERC-20 `transfer` (never `approve`) is on the roadmap.
+- **ETH only in v1.** Only plain ETH transfers can be signed. Tokens or NFTs sent to a v1 wallet can never be moved by anyone, and the locked contract can never learn to. Token transfers are v2 work in progress ([Roadmap](#roadmap)).
 - **Testnets only.** NEAR testnet and Ethereum Sepolia (`chain_id` 11155111). No mainnet, no real funds.
 - **Dynamic NFT metadata** is not built; token metadata is static.
 - **Check 3 and chainsig.js.** `checks/03-address-agreement.ts` cross-checks the address four ways: the MPC `derived_public_key` view, a pure noble derivation with the pinned testnet root key, the `chainsig.js` library, and the address recovered from a real signature. The `chainsig.js` route is reported as SKIPPED when the library does not load (it failed under Node 22 ESM in one install because of an `@noble/curves` version clash; with the committed lockfile it loaded and agreed in `--offline` mode). When skipped, the other routes still decide the verdict.
@@ -491,6 +491,6 @@ This is a description of what was changed, not an audit report, and the limits b
 
 ### Roadmap
 
-- ERC-20 `transfer` only (calldata `0xa9059cbb`, never `approve`), with a clean check that also covers allowances.
+- **v2 (in progress): tokens leave with the wallet.** A new contract at a new account builds, besides plain ETH transfers, only token transfers: ERC-20 `transfer`, ERC-721 `transferFrom`/`safeTransferFrom` and ERC-1155 `safeTransferFrom` from the wallet. It never builds `approve`, `setApprovalForAll` or `permit`, and it only signs transactions it built, so no Permit2 message or EIP-7702 delegation can be signed either. The clean check also scans the chain for `Approval`/`ApprovalForAll` events from the wallet. Out of scope on purpose: arbitrary contract calls (DeFi positions, vesting claims), because a right granted inside an arbitrary contract can survive the sale and cannot be proven absent. v1 wallets stay ETH-only.
 - Dynamic token metadata that reflects the wallet (address, balance, verdict).
 - CLI polish: broadcast pending transactions, JSON output.

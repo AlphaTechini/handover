@@ -42,7 +42,7 @@ recover the signer from the assembled transaction.
 | A19 | The deployed contract account has no access keys, so the code can never change. | deploy runbook in README section 14 | `evidence/access-keys.txt` (`view_access_key_list` output with an empty key list) | verified on testnet (key deleted in tx `4NMiwSBFLKPrZkqzuDbnGmfNey1Whew1vRYQKzEEDsqW`; `evidence/access-keys.txt` shows `"keys":[]`) |
 | A20 | The committed wasm is the file whose hash is recorded. | [`contracts/res/handover.wasm.sha256`](../contracts/res/handover.wasm.sha256), build record in [`contracts/res/BUILD.md`](../contracts/res/BUILD.md) | `sha256sum -c` in `make verify` step 4 | verified by make verify |
 | A21 | The deployed code is the committed wasm. | n/a | the code hash of `handover.handover-alpha.testnet` (`view_account`) is `5AAyWq6VDRFvMj7fZH8PipvY5F4MW3nS89qSzMw6rrkz`, the base58 form of the SHA-256 in `handover.wasm.sha256` | verified on testnet |
-| A22 | ERC-20 transfers. | not built (P1) | n/a | not built |
+| A22 | Token transfers (ERC-20, ERC-721, ERC-1155). | not in v1: the locked v1 contract only signs plain ETH transfers, so tokens sent to a v1 wallet can never be moved. v2 (transfer-only calls, never approvals) is in progress at a new contract account | n/a | not built |
 
 ## B. Reserved transaction (decision D1)
 
