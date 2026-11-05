@@ -1,0 +1,62 @@
+{
+  "kind": "handover-snapshot",
+  "version": 1,
+  "synthetic": false,
+  "capturedAt": "2026-11-05T15:26:02.771Z",
+  "contractId": "handover.handover-alpha.testnet",
+  "tokenId": "2",
+  "address": "0xc45584dfbc64c93a97167266207cd45f6c90532c",
+  "wallet": {
+    "token_id": "2",
+    "owner_id": "handover-alpha-buyer.testnet",
+    "path": "handover-2",
+    "next_nonce": 3,
+    "in_flight": false,
+    "transfer_call_pending": false,
+    "eth_address": "0xc45584dfbc64c93a97167266207cd45f6c90532c",
+    "listing": null,
+    "reserved": null,
+    "sig_count": 3,
+    "minted_at_ns": "1793882379819896408"
+  },
+  "sigLog": [
+    {
+      "nonce": 0,
+      "to": "0x6e302e86b4712eb5cc63ca61acfbc6df8ce3c342",
+      "value_wei": "500000000000000",
+      "gas_limit": "29271",
+      "max_fee_per_gas": "1000000000",
+      "max_priority_fee_per_gas": "4",
+      "tx_hash": "0x53978eb590ee567f935bafbb5579a59c6d88099c5148bd4b1e2efebf120a417e",
+      "raw_signed_tx_hex": "0x02f87083aa36a78004843b9aca00827257946e302e86b4712eb5cc63ca61acfbc6df8ce3c3428701c6bf5263400080c080a04095debda474e0abe574a55ad1bdf5cd1ee795da9720ce7db5d91f54c52d70c0a033a13427cb352db210d20ac3be01ce72da0c34fb4c007e866a2a7633344beb41",
+      "signed_at_ns": "1793882604389508999"
+    },
+    {
+      "nonce": 1,
+      "to": "0x6e302e86b4712eb5cc63ca61acfbc6df8ce3c342",
+      "value_wei": "1000000000000000",
+      "gas_limit": "30000",
+      "max_fee_per_gas": "5000000000",
+      "max_priority_fee_per_gas": "1000000000",
+      "tx_hash": "0xbd811804f3a0627ea1f393909e223d1e9d94e972c8e80beb29fef8e46d3f1fb3",
+      "raw_signed_tx_hex": "0x02f87583aa36a701843b9aca0085012a05f200827530946e302e86b4712eb5cc63ca61acfbc6df8ce3c34287038d7ea4c6800080c001a08463bba6edd94acc08083a533fc62b061dc7dc775ff6aa70c90b52d114094ab7a050694b2c0c6793c21eb6e15db4bf581c3955f47a7da0fa1ee79349f860ac2e8a",
+      "signed_at_ns": "1793882707434069971"
+    },
+    {
+      "nonce": 2,
+      "to": "0x6e302e86b4712eb5cc63ca61acfbc6df8ce3c342",
+      "value_wei": "500000000000000",
+      "gas_limit": "29271",
+      "max_fee_per_gas": "1000000000",
+      "max_priority_fee_per_gas": "4",
+      "tx_hash": "0xf7adb3175c7a89902cadf47dad4886c19e4455c4831eb853369b163763aedacf",
+      "raw_signed_tx_hex": "0x02f87083aa36a70204843b9aca00827257946e302e86b4712eb5cc63ca61acfbc6df8ce3c3428701c6bf5263400080c080a0cff44ad6d8e24128e7b81f0495084d048b8f0f16ef4f88605471c526d7ca1edba03e030a38c7b8bf4eecaa7a678b5422aaa6012eef8692658733c148938dd8475f",
+      "signed_at_ns": "1793883548498329439"
+    }
+  ],
+  "chain": {
+    "confirmedNonce": 3,
+    "pendingNonce": 3,
+    "balanceWei": "975944998508590"
+  }
+}

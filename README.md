@@ -4,7 +4,7 @@
 
 Who it is for: anyone who needs to hand over a whole wallet instead of moving assets one by one. Examples: handing a project or treasury wallet to a new team, selling a funded wallet, or gifting one. The buyer gets the wallet itself, not a promise. Today a Handover wallet holds and sends ETH only; ERC-20 tokens (for example tokens vesting to the address) are on the roadmap, not built.
 
-Status: **deployed on NEAR testnet** at [`handover.handover-alpha.testnet`](https://testnet.nearblocks.io/address/handover.handover-alpha.testnet), with a hosted demo at **https://handover-blush.vercel.app**. A full sale (mint, fund, spend, list, clean check, buy, buyer spends, old owner refused) ran on NEAR testnet and Ethereum Sepolia, and its proof is in [`evidence/`](evidence/README.md). Testnets only.
+Status: **deployed and locked on NEAR testnet** at [`handover.handover-alpha.testnet`](https://testnet.nearblocks.io/address/handover.handover-alpha.testnet) (no access keys left, so the code can never change: [`evidence/access-keys.txt`](evidence/access-keys.txt)), with a hosted demo at **https://handover-blush.vercel.app**. A full sale (mint, fund, spend, list, clean check, buy, buyer spends, old owner refused) ran on NEAR testnet and Ethereum Sepolia, and its proof is in [`evidence/`](evidence/README.md). The recorded demo ran the same flow again through the web app, including a caught pre-signed transaction: [`evidence/demo-run-2026-11-05.md`](evidence/demo-run-2026-11-05.md). Testnets only.
 
 **Check it in 30 seconds, with no wallet and no keys:**
 
@@ -98,7 +98,7 @@ The MPC network publishes a signature on chain when it responds, even if Handove
 | **Cross-contract call and callback** (`.then`, `#[private]`, raw promise result read in the callback) | [`wallet.rs`](contracts/handover/src/wallet.rs) (`request_transfer`, `on_signed`, `read_signature_result`) | Signing is asynchronous. Without the callback the contract cannot log the signature, or release the reservation. |
 | **1-yocto confirmation** (`assert_one_yocto`) | [`market.rs`](contracts/handover/src/market.rs) (`list`, `delist`), [`wallet.rs`](contracts/handover/src/wallet.rs) (`release_stuck`) | A function-call access key could list or delist; the deposit forces a full-access key. |
 | **Attached deposits and promise transfers** | [`market.rs`](contracts/handover/src/market.rs) (`buy`), [`wallet.rs`](contracts/handover/src/wallet.rs) | Payment and NFT transfer could not happen in one atomic call. |
-| **Locked contract** (full-access keys deleted after the final deploy) | [`README` section 14](#14-setup-env-deploy-security-roadmap), proof planned in `evidence/access-keys.txt` | The contract owner could upgrade the code and take every wallet. The contract has no admin or upgrade method, so deleting its keys makes the code final. |
+| **Locked contract** (full-access keys deleted after the final deploy) | [`README` section 14](#14-setup-env-deploy-security-roadmap), proof in [`evidence/access-keys.txt`](evidence/access-keys.txt) (key deleted in tx `4NMiwSBFLKPrZkqzuDbnGmfNey1Whew1vRYQKzEEDsqW`) | The contract owner could upgrade the code and take every wallet. The contract has no admin or upgrade method, so deleting its keys makes the code final. |
 | **NEP-297 events** | [`events.rs`](contracts/handover/src/events.rs) | Indexers would have no record of signatures, listings and sales. |
 | **Environment host functions** (`env::keccak256`, `env::ecrecover`) | [`tx.rs`](contracts/handover/src/tx.rs) | The contract could not hash transactions or validate returned signatures on chain. |
 
@@ -123,9 +123,9 @@ Full table with one row per security requirement: [`docs/CLAIMS.md`](docs/CLAIMS
 | Offline snapshot verification checks every logged transaction against its raw bytes and its signer | [`verifySnapshot` snapshot.ts:83](packages/cleancheck/src/snapshot.ts#L83) | `snapshot.test.ts` (`verifySnapshot`, committed fixtures) |
 | Ethereum address derived from the MPC public key | [`ethAddressFromMpcKey` address.ts:41](packages/cleancheck/src/address.ts#L41) | `address.test.ts`; live: check 3 agreed four ways, including the address recovered from a real MPC signature ([`checks.log`](evidence/checks.log)) |
 | The committed wasm matches its recorded hash | [`contracts/res/handover.wasm.sha256`](contracts/res/handover.wasm.sha256) | `make verify` step 4 |
-| MPC returns the signature shape the contract expects; full sale works on testnet and Sepolia | [`mpc.rs`](contracts/handover/src/mpc.rs) | check 2 ([`sig-BmLN….json`](evidence/sig-BmLNbqK1tLowB6kpAg5cakJuhUkt3QP7nyMkVAHG85BY.json)), check 5 ([`e2e-*.json`](evidence/)), [`snapshots/token-1-*.json`](evidence/snapshots/) |
+| MPC returns the signature shape the contract expects; full sale works on testnet and Sepolia | [`mpc.rs`](contracts/handover/src/mpc.rs) | check 2 ([`sig-BmLN….json`](evidence/sig-BmLNbqK1tLowB6kpAg5cakJuhUkt3QP7nyMkVAHG85BY.json)), check 5 ([`e2e-*.json`](evidence/)), [`snapshots/token-1-*.json`](evidence/snapshots/), demo run [`demo-run-2026-11-05.md`](evidence/demo-run-2026-11-05.md) |
 | The deployed code is the committed wasm | [`handover.wasm.sha256`](contracts/res/handover.wasm.sha256) | on-chain code hash `5AAyWq6VDRFvMj7fZH8PipvY5F4MW3nS89qSzMw6rrkz` is the base58 form of the committed SHA-256 |
-| Contract account has no access keys | n/a | pending: the keys are deleted after the demo recording (`evidence/access-keys.txt`) |
+| Contract account has no access keys | n/a | [`evidence/access-keys.txt`](evidence/access-keys.txt): `view_access_key_list` returns `"keys":[]`; the last key was deleted in tx `4NMiwSBFLKPrZkqzuDbnGmfNey1Whew1vRYQKzEEDsqW` |
 
 Security-hardening pass (fixes F0 to F8, see section 14 "Independent review"):
 
@@ -143,7 +143,7 @@ Security-hardening pass (fixes F0 to F8, see section 14 "Independent review"):
 
 ## 7. What is mocked or not built
 
-- **Deployed on testnet, not locked yet.** The contract runs at `handover.handover-alpha.testnet` and the evidence run is committed in [`evidence/`](evidence/README.md). Its full-access key is deleted only after the demo is recorded, so until `evidence/access-keys.txt` exists the code can still be changed by its deployer.
+- **Deployed and locked on testnet.** The contract runs at `handover.handover-alpha.testnet` and the evidence run is committed in [`evidence/`](evidence/README.md). Its full-access key was deleted after the demo recording ([`evidence/access-keys.txt`](evidence/access-keys.txt)), so nobody can change the code or withdraw its NEAR balance.
 - **Contract unit tests use a stand-in for MPC.** They feed the callback a signature made with a throwaway test key. They prove the contract's logic and encoding. That the real MPC contract answers in this shape is proven separately by capability check 2 and by the live evidence run.
 - **Synthetic fixtures.** The snapshots in `packages/cleancheck/test/fixtures/` are hand-made and labelled `SYNTHETIC` in their `note` and in the CLI output. They are not chain data.
 - **No ERC-20.** Only ETH transfers can be signed. ERC-20 `transfer` (never `approve`) is on the roadmap.
@@ -153,7 +153,7 @@ Security-hardening pass (fixes F0 to F8, see section 14 "Independent review"):
 - **`#[private]` on `on_signed` and `new`** is enforced by the NEAR SDK macro only in the compiled wasm, not in unit tests. The unit tests cover an explicit predecessor check in each function body; the macro itself is exercised only on testnet.
 - **Gas numbers.** Unit tests count host-function gas only. MPC latency and gas were measured once on testnet with the check-2 probe (section 11); per-call gas of the Handover contract itself is not broken down yet.
 - **Open contract risks:** the contract does not know a token's derived key in advance, so the first accepted signature pins the address and it relies on the MPC contract, whose `respond` verifies signatures, for that first one; a reserved transaction blocks transfers and sales until `retry_reserved` succeeds, so an MPC outage can lock a token. The remaining limits are listed in section 14 ("Security model and limits") and in [`contracts/handover/README.md`](contracts/handover/README.md).
-- **The web UI** is a static SvelteKit app that reads the chain directly (no backend), hosted at https://handover-blush.vercel.app against the live contract. The evidence run itself was driven from the CLI, so the browser flow has no committed proof of its own.
+- **The web UI** is a static SvelteKit app that reads the chain directly (no backend), hosted at https://handover-blush.vercel.app against the live contract. The 2026-11-04 evidence run was driven from the CLI; the recorded demo on 2026-11-05 ran the browser flow, and its transactions are in [`evidence/demo-run-2026-11-05.md`](evidence/demo-run-2026-11-05.md).
 
 ## 8. Verify everything offline (`make verify`)
 
@@ -166,7 +166,7 @@ git clone <this repository> && cd handover
 make verify
 ```
 
-`make verify` installs Node dependencies first if `node_modules` is missing, then runs: (1) the contract unit tests, (2) the clean-check library tests, (3) the clean-check CLI over every `evidence/snapshots/*.json` (the 5 real snapshots from the evidence run) and the 6 synthetic fixtures, (4) `sha256sum -c` on the committed wasm. It exits non-zero if any step fails.
+`make verify` installs Node dependencies first if `node_modules` is missing, then runs: (1) the contract unit tests, (2) the clean-check library tests, (3) the clean-check CLI over every `evidence/snapshots/*.json` (the 6 real snapshots from the evidence run and the demo run) and the 6 synthetic fixtures, (4) `sha256sum -c` on the committed wasm. It exits non-zero if any step fails.
 
 Output of the same four steps on the current tree (run in Git Bash on Windows; the real-snapshot and fixture reports are shortened to their verdict lines here, two fixtures are shown in full, and the absolute path is replaced by `/path/to/handover`):
 
@@ -186,6 +186,7 @@ Real snapshots (evidence/snapshots):
 (token-1-3-listed.json: CLEAN, expected clean, OK)
 (token-1-4-sold.json: CLEAN, expected clean, OK)
 (token-1-5-buyer-spent.json: CLEAN, expected clean, OK)
+(token-2-demo-final.json: CLEAN, expected clean, OK)
 
 Synthetic fixtures (packages/cleancheck/test/fixtures, NOT chain data):
 (busy-in-flight.json: BUSY, expected busy, OK)
@@ -243,7 +244,7 @@ Synthetic fixtures (packages/cleancheck/test/fixtures, NOT chain data):
 [4/4] Committed wasm matches its sha256
 handover.wasm: OK
 
-VERIFY OK in 53s: contract tests pass, clean-check tests pass, 6 synthetic fixtures and 5 real snapshot(s) give the expected verdicts, wasm hash matches.
+VERIFY OK in 53s: contract tests pass, clean-check tests pass, 6 synthetic fixtures and 6 real snapshot(s) give the expected verdicts, wasm hash matches.
 ```
 
 The abbreviated lines are shortened here; the command prints the full report for each. Wall time was 53 s on Windows.
