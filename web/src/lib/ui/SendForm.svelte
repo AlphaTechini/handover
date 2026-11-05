@@ -157,7 +157,9 @@
 				label: 'MPC signature',
 				detail:
 					failedAt === 'sign'
-						? 'Refused before any signature was created.'
+						? err?.kind === 'refused'
+							? 'Refused before any signature was created.'
+							: (err?.title ?? 'Signing failed.')
 						: signed
 							? `Signed with nonce ${signed.nonce}, recorded in the public log.`
 							: 'The contract builds the transfer and asks the NEAR signing network to sign it.',

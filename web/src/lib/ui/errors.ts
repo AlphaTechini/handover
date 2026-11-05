@@ -96,7 +96,14 @@ export function describeError(e: unknown, opts: { contractCall?: boolean } = {})
 		};
 	}
 	if (/(user )?(rejected|denied|cancel+ed|closed)/i.test(raw)) {
-		return { kind: 'rejected', title: 'Request cancelled', detail: 'Nothing was sent. The request was cancelled in your wallet.', raw };
+		// Some wallets report a closed popup this way even after the transaction ran, so never claim nothing was sent.
+		return {
+			kind: 'rejected',
+			title: 'Wallet did not confirm',
+			detail:
+				'Your wallet returned no result. If you cancelled, nothing was sent. If you approved it, it may still have run: check your account on NearBlocks before trying again.',
+			raw
+		};
 	}
 	if (/(failed to fetch|network|timeout|timed out|econn|503|502|429)/i.test(raw)) {
 		return { kind: 'network', title: 'Network problem', detail: 'An RPC endpoint did not respond. Check your connection and try again.', raw };
