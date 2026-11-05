@@ -2,11 +2,12 @@
 
 Six small scripts that prove, before the main contract is written, that the pieces the
 product depends on work on NEAR testnet and Sepolia. They are run by you, with your own
-NEAR account and Sepolia funds. The sandbox that wrote them cannot reach NEAR or Sepolia RPC,
-so the live runs have not been done yet. The offline parts have been run.
+NEAR account and Sepolia funds. They were written in a sandbox with no NEAR or Sepolia access and
+run live on 2026-11-04; the results are in "What has been run here" at the bottom.
 
-PRD section 10 is the source of these checks. Do not write the main contract until
-checks 1 to 4 pass.
+PRD section 10 is the source of these checks and asked for checks 1 to 4 to pass before the main
+contract was written. That order was not kept: the contract was committed first (commit `de78189`,
+2026-11-03) and the live checks ran the next day.
 
 ## Setup
 

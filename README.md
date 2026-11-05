@@ -2,9 +2,22 @@
 
 **An NFT that owns its own Ethereum wallet, and a sale flow that lets you buy that wallet, with everything in it, without trusting the seller.**
 
-Who it is for: anyone who needs to hand over a whole wallet instead of moving assets one by one. Examples: selling a position that is tied to an address (tokens vesting to that address, locked or illiquid balances), handing a project or treasury wallet to a new team, or gifting a funded wallet. The buyer gets the wallet itself, not a promise.
+Who it is for: anyone who needs to hand over a whole wallet instead of moving assets one by one. Examples: handing a project or treasury wallet to a new team, selling a funded wallet, or gifting one. The buyer gets the wallet itself, not a promise. Today a Handover wallet holds and sends ETH only; ERC-20 tokens (for example tokens vesting to the address) are on the roadmap, not built.
 
 Status: **deployed on NEAR testnet** at [`handover.handover-alpha.testnet`](https://testnet.nearblocks.io/address/handover.handover-alpha.testnet), with a hosted demo at **https://handover-blush.vercel.app**. A full sale (mint, fund, spend, list, clean check, buy, buyer spends, old owner refused) ran on NEAR testnet and Ethereum Sepolia, and its proof is in [`evidence/`](evidence/README.md). Testnets only.
+
+**Check it in 30 seconds, with no wallet and no keys:**
+
+- Open https://handover-blush.vercel.app/wallet/?id=1. The page reads the contract and Sepolia from your browser and shows wallet #1, the one sold in the evidence run, as **Clean**: the contract issued 2 signatures and Sepolia confirmed nonce 2, so no signed transaction is left to replay.
+- Or from a terminal, after `pnpm install` in a clone:
+
+  ```bash
+  HANDOVER_CONTRACT=handover.handover-alpha.testnet pnpm --silent --filter @handover/cleancheck cli status 1
+  ```
+
+  It prints `VERDICT: CLEAN` (14 s on the measured run). The code behind it is [`packages/cleancheck/src/check.ts`](packages/cleancheck/src/check.ts); the contract is [`contracts/handover/src/`](contracts/handover/src/).
+
+The full offline suite is `make verify` ([section 8](#8-verify-everything-offline-make-verify)): about 1 minute with a warm Rust build, about 6.5 minutes from a fresh clone, most of it compiling the contract tests.
 
 ## 2. Built for NEAR HACKATHON
 
@@ -45,7 +58,7 @@ NFT Chain Keys ([`near/multichain-gas-station-contract`, directory `nft_key`](ht
 Each Handover NFT has its own Ethereum address, derived by NEAR Chain Signatures from the Handover contract's account and the path `handover-<token_id>`. Only the Handover contract can ask the MPC signer for signatures on that address.
 
 1. **Mint.** `nft_mint` creates token `0`, `1`, `2`, ... for the caller. The UI and CLI derive the token's Ethereum address from the MPC contract's `derived_public_key` view.
-2. **Spend (owner only).** `request_transfer(token_id, to, value_wei, gas_limit, max_fee_per_gas, max_priority_fee_per_gas)` checks the caller owns the token and that the token is not listed, not already signing and not in a pending transfer call. The contract builds an EIP-1559 transaction itself with the next nonce, `chain_id` fixed at init, and empty calldata, hashes it, and asks the MPC contract to sign. There is no parameter for calldata, so the contract can only ever sign "send ETH to an address". The parameters are restricted: `gas_limit` must be exactly 21000, `max_fee_per_gas` at least 1 gwei, `max_priority_fee_per_gas` above 0 and not above `max_fee_per_gas`, `to` not the zero address, `value_wei` above 0. The deposit must be at least the sign fee plus 1 yocto (0.01 NEAR + 1 yocto); the contract keeps the 0.01 NEAR sign fee and forwards the rest to the MPC contract. Nothing is refunded.
+2. **Spend (owner only).** `request_transfer(token_id, to, value_wei, gas_limit, max_fee_per_gas, max_priority_fee_per_gas)` checks the caller owns the token and that the token is not listed, not already signing and not in a pending transfer call. The contract builds an EIP-1559 transaction itself with the next nonce, `chain_id` fixed at init, and empty calldata, hashes it, and asks the MPC contract to sign. There is no parameter for calldata, so the contract can only ever sign "send ETH to an address". The parameters are restricted: `gas_limit` from 21000 to 300000 (the caller estimates it per recipient, see "Residual limits" in section 14), `max_fee_per_gas` at least 1 gwei, `max_priority_fee_per_gas` above 0 and not above `max_fee_per_gas`, `to` not the zero address, `value_wei` above 0. The deposit must be at least the sign fee plus 1 yocto (0.01 NEAR + 1 yocto); the contract keeps the 0.01 NEAR sign fee and forwards the rest to the MPC contract. Nothing is refunded.
 3. **Log.** On success, `on_signed` rebuilds the transaction from its own reserved copy, checks the returned signature, appends the signed transaction to a public log (`get_sig_log`) and increments the nonce. Anyone can broadcast anything in the log. `on_signed` reads the raw MPC response itself, so a response of an unexpected shape is recorded as a failed attempt and never aborts the callback. The first accepted signature pins the wallet's Ethereum address (`eth_address` in `get_wallet`); a later signature that recovers to a different address is treated as a failed attempt.
 4. **List.** `list(token_id, price)` freezes signing. Nothing new can be signed until `delist` or a sale.
 5. **Clean check (off-chain, anyone can run it).** Read `next_nonce`, the signature log and the wallet flags from the contract, and the address's confirmed nonce from Sepolia. If the Sepolia nonce equals `next_nonce`, every signature ever issued has been used, so none can be broadcast later. The check also recovers the signer of every logged transaction and compares it with the address derived from the MPC public key; the contract's pinned `eth_address`, when set, must match that derived address too. Any mismatch is `inconsistent`.
@@ -142,7 +155,9 @@ Security-hardening pass (fixes F0 to F8, see section 14 "Independent review"):
 - **Open contract risks:** the contract does not know a token's derived key in advance, so the first accepted signature pins the address and it relies on the MPC contract, whose `respond` verifies signatures, for that first one; a reserved transaction blocks transfers and sales until `retry_reserved` succeeds, so an MPC outage can lock a token. The remaining limits are listed in section 14 ("Security model and limits") and in [`contracts/handover/README.md`](contracts/handover/README.md).
 - **The web UI** is a static SvelteKit app that reads the chain directly (no backend), hosted at https://handover-blush.vercel.app against the live contract. The evidence run itself was driven from the CLI, so the browser flow has no committed proof of its own.
 
-## 8. Try it in 30 seconds
+## 8. Verify everything offline (`make verify`)
+
+For the 30-second check with no install, see the top of this README. This section is the full offline suite.
 
 Prerequisites: Rust (stable; the `wasm32` target is **not** needed for tests), Node 22, pnpm 10, GNU make. No keys, no network access to NEAR or Ethereum, no wallet. On Windows (x86_64), `near-sdk`'s test dependency `aws-lc-sys` needs NASM: either install it or set `AWS_LC_SYS_PREBUILT_NASM=1` so it uses its prebuilt objects.
 

@@ -1,0 +1,3 @@
+# sha256sum -c reads the file name up to the line end, so a CRLF checkout breaks the hash check.
+*.sha256 text eol=lf
+*.wasm binary
