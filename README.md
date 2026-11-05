@@ -348,7 +348,11 @@ The MPC signer contract (`v1.signer-prod.testnet`) and NFT Chain Keys are third-
 
 ## 13. Other project by the same builder
 
-Co-op: <link to be added by the builder>
+The same builder also submits **Co-op**, a separate project with its own repository and contract (rule Q-015):
+
+- Repository: https://github.com/AlphaTechini/co-op
+- Hosted app: https://coop.cyberpunkinc.xyz
+- Contract (NEAR testnet): `coop-alpha.testnet`
 
 ## 14. Setup, env, deploy, security, roadmap
 
