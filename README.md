@@ -7,7 +7,7 @@
 - **Proof:** a full sale of a wallet holding ETH, two ERC-20s, two NFTs and ERC-1155 items, every transaction listed in [`evidence/token-run-2026-11-05.md`](evidence/token-run-2026-11-05.md)
 - **More:** folder map in [`structure.md`](structure.md); setup, deploy and security details in [`more-details.md`](more-details.md)
 
-The demo video was recorded on the first deployment, `handover.handover-alpha.testnet` (the same design, ETH only, also locked); see [`more-details.md`](more-details.md#earlier-deployment).
+The demo video used the first deployment, `handover.handover-alpha.testnet` (ETH only, also locked): [details](more-details.md#earlier-deployment).
 
 ## The problem
 
@@ -28,7 +28,7 @@ NEAR Chain Signatures lets a contract control an Ethereum address that no one ho
 2. **Fill.** Anyone sends ETH, ERC-20 tokens, NFTs or ERC-1155 items to that address from any wallet. No approval is needed to receive.
 3. **Spend (owner only).** The owner sends ETH or any token. The contract builds the transaction itself (a plain ETH transfer, ERC-20 `transfer`, or ERC-721 / ERC-1155 `safeTransferFrom`), asks the MPC network to sign it, and appends it to a public log with the next nonce.
 4. **List.** The owner sets a price. Signing freezes until the sale or a delist.
-5. **Check.** Anyone runs the clean check: if the address's Sepolia nonce equals the number of signatures the contract ever issued, every signature has been used, so none is left to broadcast later. The buy panel lists what the sale includes (ETH and tokens).
+5. **Check.** Anyone runs the clean check: if the Sepolia nonce equals the number of signatures ever issued, every signature has been used and none is left to broadcast. The buy panel lists what the sale includes.
 6. **Buy.** The buyer pays exactly the price, bound to the nonce they checked. The NFT, the address and everything at it move to the buyer in one call; the seller is paid in the same call.
 7. **Use.** From then on only the buyer can move anything. They can send one token, or use **Send everything** to empty the wallet to one address. The old owner's requests are refused: `Only the token owner can do this`.
 
@@ -61,7 +61,7 @@ Also used: NEP-297 events ([`events.rs`](contracts/handover/src/events.rs)), `en
 
 ## What works now
 
-Every claim with its code and proof: [`docs/CLAIMS.md`](docs/CLAIMS.md). The main ones:
+All claims with code and proof: [`docs/CLAIMS.md`](docs/CLAIMS.md).
 
 | Claim | File | Proof |
 |---|---|---|
@@ -73,12 +73,22 @@ Every claim with its code and proof: [`docs/CLAIMS.md`](docs/CLAIMS.md). The mai
 | A pre-signed transaction is caught as `dirty` | [`check.ts`](packages/cleancheck/src/check.ts) | [demo run](evidence/demo-run-2026-11-05.md) (first deployment) |
 | Deployed code = committed wasm; account locked | [`handover.wasm.sha256`](contracts/res/handover.wasm.sha256) | code hash `D2LpdVQX…ud8`; key deleted in NEAR tx `Aguy8dXR…nDA` |
 
+## What's mocked or not built
+
+- **Testnets only**, mintable test tokens, not audited.
+- **Contract unit tests stand in for MPC** with a throwaway `k256` key; the real MPC is proven live.
+- **Token encodings have no unit tests yet**; they are proven by mined Sepolia transactions ([run](evidence/token-run-2026-11-05.md)).
+- **The token list comes from Blockscout's public index**, which can miss a contract. Unlisted tokens still go out through the token form, not "Send everything".
+- **"Send everything" needs one approval per item.** Its ETH step once failed on a lagging RPC node (step 16); the fix is not yet re-run live.
+- **No arbitrary contract calls**, on purpose: a right granted inside one could survive the sale.
+- **Static NFT metadata.** More limits: [`more-details.md`](more-details.md#security-model-and-limits).
+
 ## 30-second judge check
 
 No wallet, no keys:
 
 - Open https://handover-blush.vercel.app/wallet/?id=0. Your browser reads the contract and Sepolia and shows wallet #0 **Clean** (14 issued, Sepolia nonce 14), with a log naming each token transfer.
-- Or from a terminal, after `pnpm install` in a clone (22 s measured):
+- Or from a terminal, after `pnpm install` in a clone (22 s):
 
   ```bash
   HANDOVER_CONTRACT=handover-v2-alpha.testnet pnpm --silent --filter @handover/cleancheck cli status 0
@@ -86,14 +96,13 @@ No wallet, no keys:
 
   ```text
     Contract                        handover-v2-alpha.testnet
-    Address                         0xeaa892d7d280f5d92f552837fcb9a13518156c59
     Contract next_nonce (issued)    14
     Sepolia nonce (latest)          14
     VERDICT: CLEAN
       - Contract issued 14 signatures (nonces 0-13); Sepolia confirmed nonce is 14. Every signature has been used.
   ```
 
-Full offline suite: `make verify` ([more-details.md](more-details.md#verify-everything-offline-make-verify)).
+Offline suite: `make verify` ([details](more-details.md#verify-everything-offline-make-verify)).
 
 ## Architecture
 
