@@ -4,6 +4,7 @@
 handover/
 ├── README.md                  overview, judge check, setup, security model
 ├── structure.md               this file
+├── more-details.md            setup, deploy, contract internals, security model
 ├── Makefile                   verify, test, build-contract, status, snapshot
 ├── contracts/
 │   ├── handover/              NEAR contract (Rust): NFT, signing, market
@@ -39,3 +40,4 @@ handover/
 - [`checks/README.md`](checks/README.md): capability checks; [`checks/02-mpc-sign/README.md`](checks/02-mpc-sign/README.md): the MPC probe contract.
 - [`evidence/README.md`](evidence/README.md): every live run and what it proves.
 - [`docs/README.md`](docs/README.md): claims, requirements and brief.
+- [`more-details.md`](more-details.md): setup, deploy, contract internals, security model and limits.

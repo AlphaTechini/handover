@@ -18,7 +18,7 @@ below under "First deployment"; it is locked too.
 | `sig-<tx_hash>.json` | The MPC response from a real `sign` call: latency, gas per receipt, `big_r`, `s`, `recovery_id`. | `pnpm --filter checks check:2 -- --parse <tx_hash>` |
 | `e2e-<timestamp>.json` | Sepolia transaction hashes and receipts for transfers the contract signed, plus the clean-check verdict afterwards. | `pnpm --filter checks check:5` |
 | `snapshots/token-<id>.json` | A saved view of one wallet: contract state, signature log, Sepolia nonces and balance at capture time. `make verify` re-checks every file here offline. | `make snapshot TOKEN=<id>` |
-| `access-keys.txt` | The `view_access_key_list` output for the contract account after its full-access keys were deleted. Proves the code cannot change. `first-deployment-access-keys.txt` is the same for the first deployment. | deploy runbook in the README ("Deploy") |
+| `access-keys.txt` | The `view_access_key_list` output for the contract account after its full-access keys were deleted. Proves the code cannot change. `first-deployment-access-keys.txt` is the same for the first deployment. | deploy runbook in `more-details.md` ("Deploy") |
 
 Files in `snapshots/` that the CLI wrote have `"synthetic": false`. The synthetic test fixtures live
 in `packages/cleancheck/test/fixtures/`, not here.
@@ -36,7 +36,7 @@ verifies the synthetic fixtures only.
 ## How to produce the evidence
 
 Prerequisites: a funded NEAR testnet account, Sepolia ETH from a faucet, `.env` filled from
-`.env.example`, and the contract deployed (README, "Deploy").
+`.env.example`, and the contract deployed (`more-details.md`, "Deploy").
 
 ```bash
 # 1. Capability checks (live). Each appends to evidence/checks.log on a live verdict.
@@ -45,7 +45,7 @@ pnpm --filter checks check:6 -- --address 0xYourSepoliaAddress
 pnpm --filter checks check:2 -- --parse <tx_hash_of_probe_call>     # writes sig-<tx_hash>.json
 pnpm --filter checks check:3 -- <contract_account> handover-0 --sig evidence/sig-<tx_hash>.json
 
-# 2. Full run through the deployed contract: mint, request_transfer (README, "Deploy"),
+# 2. Full run through the deployed contract: mint, request_transfer (`more-details.md`, "Deploy"),
 #    fund the derived address, then:
 pnpm --filter checks check:5                                         # writes e2e-<timestamp>.json
 
@@ -98,4 +98,4 @@ Token 1 was funded from that deployment's token 0 wallet (Sepolia tx
 `0x7995249408ad663f87a161eaca1900ee3af41d454de39b874594e0b03d77ec46`, 204,600 gas because the
 address was new). That token 0 is not part of the evidence: its first two transfers were signed with
 `gas_limit` 21000 and reverted under Sepolia's Glamsterdam gas rules, which led to the 21000 to
-300000 range (README, "Residual limits").
+300000 range (`more-details.md`, "Security model and limits").

@@ -5,20 +5,9 @@
 - **Live demo:** https://handover-blush.vercel.app (NEAR testnet and Ethereum Sepolia, no real funds)
 - **Contract:** [`handover-v2-alpha.testnet`](https://testnet.nearblocks.io/address/handover-v2-alpha.testnet), **locked**: no access keys remain, so the code can never change ([`evidence/access-keys.txt`](evidence/access-keys.txt))
 - **Proof:** a full sale of a wallet holding ETH, two ERC-20s, two NFTs and ERC-1155 items, every transaction listed in [`evidence/token-run-2026-11-05.md`](evidence/token-run-2026-11-05.md)
-- **Repository map:** [`structure.md`](structure.md)
+- **More:** folder map in [`structure.md`](structure.md); setup, deploy and security details in [`more-details.md`](more-details.md)
 
-## Built for NEAR HACKATHON
-
-Tracks: **NFTs That Do Something** (`nfts`) and **Open Innovation** (`open`, chain abstraction). Security is a candidate third track, because resale safety is the core of the product.
-
-| Track brief item | Where Handover does it | File |
-|---|---|---|
-| NFTs as accounts that own money | Each NFT controls a real Ethereum address and everything at it: ETH, ERC-20, ERC-721 and ERC-1155 | [`contracts/handover/src/wallet.rs`](contracts/handover/src/wallet.rs) |
-| Hold inventory | The wallet page shows the address, its live balance, its tokens and its signature log | [`web/src/routes/wallet/+page.svelte`](web/src/routes/wallet/+page.svelte) |
-| Carry access rights | Owning the NFT is the only way to get a signature for the address | [`contracts/handover/src/lib.rs`](contracts/handover/src/lib.rs) (`require_owner`) |
-| Ownership with behaviour | Listing freezes signing; the contract refuses anything that could survive a sale | [`contracts/handover/src/market.rs`](contracts/handover/src/market.rs) |
-| Chain abstraction | A NEAR contract controls an Ethereum account through Chain Signatures, with no private key anywhere | [`contracts/handover/src/mpc.rs`](contracts/handover/src/mpc.rs), [`tx.rs`](contracts/handover/src/tx.rs) |
-| Security (candidate) | Public signature log, clean check, locked contract | [`packages/cleancheck/src/check.ts`](packages/cleancheck/src/check.ts) |
+The demo video was recorded on the first deployment, `handover.handover-alpha.testnet` (the same design, ETH only, also locked); see [`more-details.md`](more-details.md#earlier-deployment).
 
 ## The problem
 
@@ -44,6 +33,19 @@ NEAR Chain Signatures lets a contract control an Ethereum address that no one ho
 7. **Use.** From then on only the buyer can move anything. They can send one token, or use **Send everything** to empty the wallet to one address. The old owner's requests are refused: `Only the token owner can do this`.
 
 **Invariant:** *once a Handover wallet shows clean, no one but the next owner can ever move its assets.*
+
+## Built for NEAR HACKATHON
+
+Tracks: **NFTs That Do Something** (`nfts`) and **Open Innovation** (`open`, chain abstraction). Security is a candidate third track, because resale safety is the core of the product.
+
+| Track brief item | Where Handover does it | File |
+|---|---|---|
+| NFTs as accounts that own money | Each NFT controls a real Ethereum address and everything at it: ETH, ERC-20, ERC-721 and ERC-1155 | [`contracts/handover/src/wallet.rs`](contracts/handover/src/wallet.rs) |
+| Hold inventory | The wallet page shows the address, its live balance, its tokens and its signature log | [`web/src/routes/wallet/+page.svelte`](web/src/routes/wallet/+page.svelte) |
+| Carry access rights | Owning the NFT is the only way to get a signature for the address | [`contracts/handover/src/lib.rs`](contracts/handover/src/lib.rs) (`require_owner`) |
+| Ownership with behaviour | Listing freezes signing; the contract refuses anything that could survive a sale | [`contracts/handover/src/market.rs`](contracts/handover/src/market.rs) |
+| Chain abstraction | A NEAR contract controls an Ethereum account through Chain Signatures, with no private key anywhere | [`contracts/handover/src/mpc.rs`](contracts/handover/src/mpc.rs), [`tx.rs`](contracts/handover/src/tx.rs) |
+| Security (candidate) | Public signature log, clean check, locked contract | [`packages/cleancheck/src/check.ts`](packages/cleancheck/src/check.ts) |
 
 ## Why NEAR is load-bearing
 
@@ -71,16 +73,6 @@ Every claim with its code and proof: [`docs/CLAIMS.md`](docs/CLAIMS.md). The mai
 | A pre-signed transaction is caught as `dirty` | [`check.ts`](packages/cleancheck/src/check.ts) | [demo run](evidence/demo-run-2026-11-05.md) (first deployment) |
 | Deployed code = committed wasm; account locked | [`handover.wasm.sha256`](contracts/res/handover.wasm.sha256) | code hash `D2LpdVQX…ud8`; key deleted in NEAR tx `Aguy8dXR…nDA` |
 
-## What's mocked or not built
-
-- **Testnets only**, test tokens anyone can mint, not audited.
-- **Contract unit tests stand in for MPC** with a throwaway `k256` key; the real response shape is proven live (check 2 and the runs).
-- **Token encodings have no unit tests yet**; they are proven by mined Sepolia transactions ([run](evidence/token-run-2026-11-05.md)).
-- **The token list comes from Blockscout's public index**, which can miss a contract. Unlisted tokens still belong to the owner and go out through the token form; "Send everything" covers listed tokens only.
-- **"Send everything" needs one approval per item.** Its ETH step once failed on a lagging RPC node (step 16); the fix is not yet re-run live.
-- **No arbitrary contract calls**, on purpose: a right granted inside one could survive the sale.
-- **Static NFT metadata.** Fixtures in `packages/cleancheck/test/fixtures/` are synthetic and labelled so.
-
 ## 30-second judge check
 
 No wallet, no keys:
@@ -101,33 +93,86 @@ No wallet, no keys:
       - Contract issued 14 signatures (nonces 0-13); Sepolia confirmed nonce is 14. Every signature has been used.
   ```
 
-Full offline suite: `make verify` ([below](#verify-everything-offline-make-verify)).
+Full offline suite: `make verify` ([more-details.md](more-details.md#verify-everything-offline-make-verify)).
 
 ## Architecture
 
-```text
- browser: web/ (SvelteKit, static)          CLI: packages/cleancheck/bin/handover.ts
-   web/src/lib/chain/*  (NEAR, Sepolia,        handover status | verify | snapshot
-   Blockscout token index)                                  |
-        |                                                   |
-        +-------- packages/cleancheck/src (cleanCheck, RPC readers, snapshot verifier)
-                              |
-              +---------------+----------------+
-       NEAR testnet RPC                     Sepolia RPC
-       get_wallet, get_sig_log              nonce, balance, broadcast
-              |
-   Handover contract: contracts/handover/src
-     lib.rs     NEP-171/177/178/181, nft_mint, owner and transfer guards
-     wallet.rs  request_transfer, request_token_transfer, retry_reserved, release_stuck, on_signed
-     market.rs  list, delist, buy
-     tx.rs      builds ETH and token transfers, hash, signature assembly
-     mpc.rs     MPC request/response types, gas and deposit constants
-     views.rs   get_config, get_wallet, get_sig_log, get_listing, list_listings
-              |  sign({path, payload_v2, domain_id})
-   MPC signer: v1.signer-prod.testnet (NEAR Chain Signatures)
+```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "Inter, Segoe UI, Helvetica, Arial, sans-serif"
+    fontSize: 15px
+    primaryColor: "#dbeafe"
+    primaryTextColor: "#0f172a"
+    primaryBorderColor: "#1d4ed8"
+    textColor: "#0f172a"
+    lineColor: "#475569"
+    edgeLabelBackground: "#ffffff"
+    titleColor: "#0f172a"
+    clusterBkg: "#f8fafc"
+    clusterBorder: "#94a3b8"
+  flowchart:
+    curve: basis
+    nodeSpacing: 36
+    rankSpacing: 56
+---
+flowchart LR
+    users(["<b>Seller and buyer</b><br/>NEAR wallet, e.g. Meteor"])
+
+    subgraph CLIENT["Client side: no backend, no keys"]
+        direction TB
+        web["<b>Web app</b><br/>web/<br/>mint, send, list, buy"]
+        lib["<b>Clean-check library</b><br/>packages/cleancheck/src<br/>clean, dirty, busy, inconsistent"]
+        cli["<b>Clean-check CLI</b><br/>packages/cleancheck/bin"]
+    end
+
+    subgraph NEAR["NEAR testnet"]
+        direction LR
+        subgraph CONTRACT["Handover contract: contracts/handover/src"]
+            direction TB
+            nft["<b>lib.rs</b><br/>NFT standard<br/>owner guard"]
+            market["<b>market.rs</b><br/>list, delist<br/>atomic buy"]
+            sign["<b>wallet.rs</b><br/>nonces, public<br/>signature log"]
+            tx["<b>tx.rs</b><br/>builds ETH and<br/>token transfers"]
+        end
+        mpc["<b>MPC signer</b><br/>v1.signer-prod.testnet<br/>Chain Signatures"]
+    end
+
+    subgraph ETH["Ethereum Sepolia"]
+        direction TB
+        wallet["<b>Wallet address</b><br/>ETH, ERC-20<br/>ERC-721, ERC-1155"]
+        index["<b>Blockscout index</b><br/>token holdings"]
+    end
+
+    users -- "approve calls" --> web
+    web -- "runs" --> lib
+    cli -- "runs" --> lib
+    web -- "mint, request transfer, list, buy" --> CONTRACT
+    lib -- "get_wallet, get_sig_log" --> CONTRACT
+    sign <-- "sign(tx hash), signature" --> mpc
+    web -- "broadcast signed tx" --> wallet
+    lib -- "nonce, balance" --> wallet
+    web -- "holdings" --> index
+
+    classDef person fill:#1e293b,stroke:#0f172a,color:#f8fafc
+    classDef client fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+    classDef near fill:#dcfce7,stroke:#15803d,color:#052e16
+    classDef mpcnode fill:#fef3c7,stroke:#b45309,color:#3b1d02
+    classDef eth fill:#ede9fe,stroke:#6d28d9,color:#1e0a3c
+    class users person
+    class web,cli,lib client
+    class nft,market,sign,tx near
+    class mpc mpcnode
+    class wallet,index eth
+    style CLIENT fill:#eff6ff,stroke:#1d4ed8,color:#0f172a
+    style NEAR fill:#f0fdf4,stroke:#15803d,color:#052e16
+    style CONTRACT fill:#ffffff,stroke:#15803d,color:#052e16
+    style ETH fill:#f5f3ff,stroke:#6d28d9,color:#1e0a3c
 ```
 
-There is no backend. Folder by folder, with links to every folder README: [`structure.md`](structure.md).
+There is no backend: the browser and the CLI read NEAR and Sepolia directly, and only the NEAR contract can ask the MPC network for a signature, for transactions it built itself in `tx.rs`. Folder map with links to every folder README: [`structure.md`](structure.md).
 
 ## Measured results
 
@@ -166,174 +211,27 @@ The MPC signer and NFT Chain Keys are third-party and not copied here. Token hol
 
 **Other project by the same builder** (rule Q-015): **Co-op**, https://github.com/AlphaTechini/co-op, hosted at https://coop.cyberpunkinc.xyz, contract `coop-alpha.testnet`.
 
-## Full setup
-
-### Verify everything offline (`make verify`)
-
-Prerequisites: Rust stable (the `wasm32` target is not needed for tests), Node 22, pnpm 10, GNU make, bash. No keys, no network, no wallet. On Windows (x86_64), `near-sdk`'s test dependency `aws-lc-sys` needs NASM: install it or set `AWS_LC_SYS_PREBUILT_NASM=1`.
+## Run it
 
 ```bash
 git clone https://github.com/AlphaTechini/handover && cd handover
-make verify
+make verify                    # offline: contract tests, clean-check tests, snapshots, wasm hash
+cp web/.env.example web/.env   # web app settings (public values only)
+make dev                       # web dev server
 ```
 
-It installs Node dependencies if `node_modules` is missing, then runs (1) the contract unit tests, (2) the clean-check library tests, (3) the clean-check CLI over every `evidence/snapshots/*.json` and every synthetic fixture, (4) `sha256sum -c` on the committed wasm, and exits non-zero if any step fails. Output on the current tree (Git Bash on Windows; per-file reports shortened to their verdicts except the first, path replaced by `/path/to/handover`):
+Prerequisites, the full `make verify` output, environment variables, the hosted demo walkthrough and the deploy runbook are in [`more-details.md`](more-details.md).
 
-```text
-[1/4] Contract unit tests (cargo test)
-test result: ok. 99 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.44s
-
-[2/4] Clean-check library tests (vitest)
- Test Files  8 passed (8)
-      Tests  136 passed (136)
-
-[3/4] Clean-check verdicts over committed snapshots
-Real snapshots (evidence/snapshots):
-== /path/to/handover/evidence/snapshots/token-0-final.json ==
-  Token                           0
-  Contract                        handover-v2-alpha.testnet
-  Address                         0xeaa892d7d280f5d92f552837fcb9a13518156c59
-  Balance                         0.000031270998426255 ETH (31270998426255 wei)
-  Captured                        2026-11-05T20:24:46.186Z
-  Signature log entries           14
-
-  Contract next_nonce (issued)    14
-  Sepolia nonce (latest)          14
-  Sepolia nonce (pending)         14
-
-  VERDICT: CLEAN
-    - Contract issued 14 signatures (nonces 0-13); Sepolia confirmed nonce is 14. Every signature has been used.
-  expected: clean  OK
-(token-1-1-funded.json ... token-1-5-buyer-spent.json, token-2-demo-final.json: CLEAN, expected clean, OK)
-
-Synthetic fixtures (packages/cleancheck/test/fixtures, NOT chain data):
-(busy-in-flight.json: BUSY, OK; clean-3-issued.json: CLEAN, OK; dirty-pending.json: DIRTY, OK;
- inconsistent-hash-mismatch.json, inconsistent-missing-nonce.json, inconsistent-wrong-signer.json: INCONSISTENT, OK)
-
-[4/4] Committed wasm matches its sha256
-handover.wasm: OK
-
-VERIFY OK in 82s: contract tests pass, clean-check tests pass, 6 synthetic fixtures and 7 real snapshot(s) give the expected verdicts, wasm hash matches.
-```
-
-Other targets: `make test` (contract, clean-check and web tests), `make web` (production build), `make checks-offline` (capability checks 3 and 4), `make help`.
-
-### Environment variables
-
-Root `.env` from [`.env.example`](.env.example), read by `make status`, `make snapshot` and `checks/`. None is needed for `make verify`.
-
-| Variable | Meaning | Default |
-|---|---|---|
-| `NEAR_ACCOUNT_ID` | your testnet account | empty |
-| `NEAR_PRIVATE_KEY` | not read; leave blank (near-cli-rs keeps keys in its keychain) | empty |
-| `NEAR_RPC` | NEAR testnet RPC | `https://test.rpc.fastnear.com` |
-| `MPC_CONTRACT` | MPC signer | `v1.signer-prod.testnet` |
-| `PROBE_CONTRACT` | account of the check-2 probe contract | empty |
-| `HANDOVER_CONTRACT` | the Handover account (`handover-v2-alpha.testnet`); required by `make status` and `make snapshot` | empty |
-| `SEPOLIA_RPC` | Sepolia RPC | `https://ethereum-sepolia-rpc.publicnode.com` |
-| `SEPOLIA_FUNDED_ADDRESS` | faucet-funded address (checks 1 and 6) | empty |
-| `TOKEN_ID` | token for check 5 | `0` |
-
-`web/.env` from [`web/.env.example`](web/.env.example), all public and inlined into the build: `PUBLIC_HANDOVER_CONTRACT` (required, `handover-v2-alpha.testnet`), `PUBLIC_NEAR_RPC`, `PUBLIC_SEPOLIA_RPC`, `PUBLIC_MPC_CONTRACT`. Rebuild after changing them.
-
-### Run locally
-
-```bash
-make install                   # pnpm install --frozen-lockfile
-cp .env.example .env           # CLI and capability checks (git-ignored)
-cp web/.env.example web/.env   # web app (public values only)
-make test                      # all unit tests
-make dev                       # web dev server; make web for a static build in web/build
-```
-
-The CLI is `pnpm --filter @handover/cleancheck cli <status|verify|snapshot>`, or `make status TOKEN=0` / `make snapshot TOKEN=0`.
-
-### Hosted demo walkthrough
-
-Open https://handover-blush.vercel.app with two NEAR testnet accounts in a browser wallet that supports testnet (for example Meteor) and some Sepolia ETH. Pages: `/`, `/mint/`, `/wallets/`, `/wallet/?id=N`, `/market/`, `/how/`.
-
-1. **Mint** on `/mint/`. *See:* a new token and its Ethereum address.
-2. **Fill** the address with Sepolia ETH, and tokens if you have any. *See:* balance and "Tokens in this wallet".
-3. **Send** a little ETH first (it pins the address), then a token. *See:* an Etherscan link and a log entry per nonce.
-4. **List** for a price. *See:* "Listed, signing frozen"; the market card shows the price and what is included.
-5. **Buy** from the second account: run the clean check, then buy (enabled only after a `clean` result in the last 60 seconds). *See:* the NFT, the address and its tokens move to the buyer.
-6. **Use:** send a token or **Send everything** to your own address. Back on the seller account, any send fails with `Only the token owner can do this`.
-
-### Deploy
-
-near-cli-rs 0.30.1 syntax (in Windows PowerShell 5.1, escape the quotes inside `json-args` as `\"`). `CONTRACT` is the account to deploy to.
-
-```bash
-# 1. Capability checks first (checks/README.md).
-# 2. Create and fund the contract account (code storage is about 3.3 NEAR).
-near account create-account fund-myself $CONTRACT '5 NEAR' autogenerate-new-keypair save-to-legacy-keychain \
-  sign-as $NEAR_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
-# 3. Deploy AND initialise in one transaction (`new` is #[private], so init cannot be front-run).
-near contract deploy $CONTRACT use-file contracts/res/handover.wasm \
-  with-init-call new json-args '{"mpc_contract_id":"v1.signer-prod.testnet","chain_id":11155111}' \
-  prepaid-gas '30 Tgas' attached-deposit '0 NEAR' network-config testnet sign-with-legacy-keychain send
-# 4. Use it. Mint (0.05 NEAR), send ETH (0.01 NEAR fee + 1 yocto, 300 Tgas), send a token, list (1 yocto), buy (exact price).
-near contract call-function as-transaction $CONTRACT nft_mint json-args '{}' prepaid-gas '100 Tgas' \
-  attached-deposit '0.05 NEAR' sign-as $NEAR_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
-near contract call-function as-transaction $CONTRACT request_transfer \
-  json-args '{"token_id":"0","to":"0x000000000000000000000000000000000000dEaD","value_wei":"100000000000000","gas_limit":"21000","max_fee_per_gas":"30000000000","max_priority_fee_per_gas":"1000000000"}' \
-  prepaid-gas '300 Tgas' attached-deposit '10000000000000000000001 yoctoNEAR' \
-  sign-as $NEAR_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
-near contract call-function as-transaction $CONTRACT request_token_transfer \
-  json-args '{"token_id":"0","standard":"erc20","token":"0x<token>","to":"0x<recipient>","id":"0","amount":"1000000000000000000","gas_limit":"200000","max_fee_per_gas":"30000000000","max_priority_fee_per_gas":"1000000000"}' \
-  prepaid-gas '300 Tgas' attached-deposit '10000000000000000000001 yoctoNEAR' \
-  sign-as $NEAR_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
-near contract call-function as-transaction $CONTRACT list json-args '{"token_id":"0","price":"1000000000000000000000000"}' \
-  prepaid-gas '100 Tgas' attached-deposit '1 yoctoNEAR' sign-as $NEAR_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
-near contract call-function as-transaction $CONTRACT buy json-args '{"token_id":"0","expected_next_nonce":2}' \
-  prepaid-gas '100 Tgas' attached-deposit '1 NEAR' sign-as $BUYER_ACCOUNT_ID network-config testnet sign-with-legacy-keychain send
-# 5. Lock the FINAL deploy: delete every key, then save the proof.
-near account list-keys $CONTRACT network-config testnet now
-near account delete-keys $CONTRACT public-keys ed25519:<KEY> network-config testnet sign-with-legacy-keychain send
-curl -s "$NEAR_RPC" -H 'content-type: application/json' -d \
-  '{"jsonrpc":"2.0","id":1,"method":"query","params":{"request_type":"view_access_key_list","finality":"final","account_id":"'"$CONTRACT"'"}}' \
-  > evidence/access-keys.txt     # expect "keys":[]
-```
-
-Notes: the sign deposit is kept as the fee except 1 yocto forwarded to MPC, and nothing is refunded. Estimate `gas_limit` per recipient (`eth_estimateGas` from the wallet's address). The first transfer must be ETH, because it pins the wallet's address that token transfers are sent from. `expected_next_nonce` is the `next_nonce` the buyer's clean check saw. Locking is irreversible, and a redeploy to a new account changes every wallet address.
-
-### How it works in detail
-
-- **Signing.** `request_transfer` and `request_token_transfer` check ownership, then that the token is not listed, signing, reserved or in a pending transfer call. The contract builds the EIP-1559 transaction itself with the next nonce and the `chain_id` fixed at init, stores it as *reserved*, and asks MPC to sign its hash. No method takes raw calldata. `on_signed` rebuilds the transaction from the reservation, checks the signature, logs it (`get_sig_log`) and advances the nonce. The first accepted signature pins the wallet's address (`eth_address`).
-- **Reserved-transaction rule.** MPC can publish a signature even if the callback fails. So a failed attempt keeps its reservation and its nonce, and blocks new requests, `list`, `buy` and transfers until `retry_reserved` signs the identical transaction. If a callback never runs, `release_stuck` (after 300 blocks) clears `in_flight` but keeps the reservation. Any leaked signature therefore authorises a transaction the contract already knows.
-- **Transfer calls.** `nft_transfer_call` freezes the wallet until `nft_resolve_transfer` clears the flag on every path.
-
-| Verdict | Meaning |
-|---|---|
-| `clean` | Log complete, nothing in flight or reserved, Sepolia nonce equals `next_nonce`. Safe to buy. |
-| `dirty` | Some logged transactions are not mined yet. Anyone can broadcast them; then the wallet is `clean`. |
-| `busy` | A request is in flight, a transaction is reserved, or a transfer call is unresolved. |
-| `inconsistent` | The data contradicts itself (log gap, chain ahead of the contract, wrong signer, bad raw bytes). Unsafe. |
-
-### Security model and limits
-
-- **Trust in NEAR's MPC network.** Whoever can break or collude inside it could sign for any derived address.
-- **No approvals through the contract.** Only the contract can sign for the address, and it signs only the transfers it built, so no `approve`, `setApprovalForAll`, `permit`, Permit2 message or EIP-7702 delegation can be created for a Handover wallet.
-- **The clean check is a point-in-time check.** It holds for a listed wallet because listing freezes signing; the web app re-runs it within 60 seconds of buying.
-- **Plain `nft_transfer` gifting carries no clean check.** Recipients should run it before accepting; the safe path is `list` and `buy`.
-- **Reserved transactions can lock a token** during an MPC outage, by design: the alternative is a possible unlogged signature.
-- **Token behaviour is the token's.** The contract encodes standard calls; a token contract that blocks transfers, charges fees or rebases still behaves that way.
-- **Residual limits:** a seller payout to a deleted account stays with the contract; a resolver that runs out of gas leaves a token frozen; a recipient needing more than the gas cap cannot be paid; a signed transfer that the balance cannot cover stays `dirty` until topped up (step 16 of the run); signatures produced by code deployed earlier at the same account are invisible to the log. `handover-v2-alpha.testnet` ran only the committed code (deploy and init in NEAR tx `3qp13HfFp8Gdt8Yu57PRY57EZ6d8pfxeL1Ujcu1BAwQX`).
-- **Not audited.** An internal adversarial review led to fixes F0 to F8 (front-run init, `buy` bound to the checked nonce, raw callback parsing, prepaid storage, `release_stuck`, transfer-call lock, fee and gas floors, address pinning). Details per fix: [`docs/CLAIMS.md`](docs/CLAIMS.md) section G.
-
-### Earlier deployment
-
-The first deployment, `handover.handover-alpha.testnet`, is the same design without token transfers: it signs ETH transfers only. The demo video and the first evidence runs (capability checks, token 1, the demo run on token 2) used it. It is locked too ([`evidence/first-deployment-access-keys.txt`](evidence/first-deployment-access-keys.txt)), its wasm is in [`contracts/res/first-deployment/`](contracts/res/first-deployment/), and its evidence is listed in [`evidence/README.md`](evidence/README.md). Tokens sent to its wallets cannot be moved.
-
-### Roadmap
+## Roadmap
 
 - One approval for several transfers (needs a new contract account, since this one is locked).
 - A clean-check rule that every logged transaction has one of the allowed shapes, and unit tests for the token encodings.
 - Dynamic token metadata that shows the wallet's address, holdings and verdict.
 - CLI: broadcast pending transactions, JSON output.
 
-### Docs index
+## Docs index
 
+- [`more-details.md`](more-details.md): verify output, setup, deploy, how it works inside, security model and limits, the earlier deployment.
 - [`structure.md`](structure.md): folder map with links to every folder README.
 - [`docs/CLAIMS.md`](docs/CLAIMS.md): every claim mapped to code and proof.
 - [`evidence/README.md`](evidence/README.md): live runs, transaction hashes, snapshots, key lists.

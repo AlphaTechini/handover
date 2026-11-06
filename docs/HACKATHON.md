@@ -242,4 +242,3 @@ Where the team finds collaborators, asks questions and follows updates.
 | NEAR Discord | https://discord.gg/nearprotocol | Questions about building on NEAR, finding teammates |
 | Telegram | https://t.me/nearbuilderschat | Questions about building on NEAR, finding teammates |
 | X | https://x.com/NEARProtocol | Hackathon announcements and updates |
-
