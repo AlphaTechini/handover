@@ -9,8 +9,9 @@ export function pc(): PublicClient {
 	return (client ??= createPublicClient({ chain: sepolia, transport: http(SEPOLIA_RPC) }) as PublicClient);
 }
 
-export async function getBalance(address: Hex): Promise<bigint> {
-	return pc().getBalance({ address });
+/** Balance at `block` when given (a node that has not reached it errors instead of answering stale), else latest. */
+export async function getBalance(address: Hex, block?: bigint): Promise<bigint> {
+	return pc().getBalance(block === undefined ? { address } : { address, blockNumber: block });
 }
 
 export async function getNonces(address: Hex): Promise<{ latest: number; pending: number }> {
@@ -53,8 +54,12 @@ export async function broadcast(rawSignedTxHex: Hex): Promise<Hex> {
 }
 
 export async function waitForReceipt(txHash: Hex): Promise<'success' | 'reverted'> {
+	return (await waitForMined(txHash)).status;
+}
+
+export async function waitForMined(txHash: Hex): Promise<{ status: 'success' | 'reverted'; blockNumber: bigint }> {
 	const r = await pc().waitForTransactionReceipt({ hash: txHash, timeout: 120_000, pollingInterval: 3_000 });
-	return r.status;
+	return { status: r.status, blockNumber: r.blockNumber };
 }
 
 export const etherscanTx = (h: string) => `${ETH_EXPLORER}/tx/${h}`;

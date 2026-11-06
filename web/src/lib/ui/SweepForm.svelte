@@ -15,7 +15,7 @@
 		requestTransfer,
 		tokenTransferGasLimit,
 		transferGasLimit,
-		waitForReceipt,
+		waitForMined,
 		type Hex,
 		type TokenHolding
 	} from '$lib/chain';
@@ -50,6 +50,8 @@
 	}
 	let items = $state<Item[]>([]);
 	let running = $state(false);
+	// Block of the last mined sweep transfer; the ETH balance is read there so a lagging RPC node cannot report it stale.
+	let lastBlock: bigint | undefined;
 
 	const toAddr = $derived(/^0x[0-9a-fA-F]{40}$/.test(to.trim()) ? (to.trim() as Hex) : null);
 	const canRun = $derived(!!toAddr && !!fromAddress && !running && !blocked);
@@ -69,13 +71,25 @@
 		set(i, { status: 'sending' });
 		const hash = await broadcast(signed.rawSignedTxHex);
 		set(i, { txHash: hash });
-		const r = await waitForReceipt(hash);
-		if (r !== 'success') {
+		const r = await waitForMined(hash);
+		lastBlock = r.blockNumber;
+		if (r.status !== 'success') {
 			set(i, { status: 'failed', error: 'Reverted on Sepolia.' });
 			return false;
 		}
 		set(i, { status: 'done' });
 		return true;
+	}
+
+	async function balanceAfterTokens(from: Hex): Promise<bigint> {
+		for (let i = 0; ; i++) {
+			try {
+				return await getBalance(from, lastBlock);
+			} catch (x) {
+				if (i >= 5) throw x;
+				await new Promise((r) => setTimeout(r, 3000));
+			}
+		}
 	}
 
 	async function run() {
@@ -85,6 +99,7 @@
 		const list = [...holdings];
 		items = [...list.map((h) => ({ label: label(h), status: 'waiting' as Status })), { label: 'Remaining ETH', status: 'waiting' }];
 		running = true;
+		lastBlock = undefined;
 		try {
 			const fees = clampFees(await getFees());
 			for (let i = 0; i < list.length; i++) {
@@ -114,7 +129,7 @@
 			const e = items.length - 1;
 			set(e, { status: 'signing' });
 			try {
-				const balance = await getBalance(from);
+				const balance = await balanceAfterTokens(from);
 				const gasLimit = (await transferGasLimit(from, recipient, 1n)) ?? MIN_GAS_LIMIT;
 				const value = balance - gasLimit * fees.maxFeePerGas;
 				if (value <= 0n) {
