@@ -9,7 +9,7 @@ This PRD is the single source of truth for the coding agent building Handover. R
 
 ## 1. One-liner
 
-**Handover is an NFT that owns its own Ethereum wallet, and a sale flow that lets you buy that wallet, and its ETH, without having to trust the seller (tokens follow in v2, see the README roadmap).**
+**Handover is an NFT that owns its own Ethereum wallet, and a sale flow that lets you buy that wallet, with its ETH and tokens, without having to trust the seller.**
 
 Who it's for: anyone who needs to hand over a whole wallet rather than move assets one by one. Examples: selling a position that is tied to an address (tokens vesting to that address, locked or illiquid balances), handing a project or treasury wallet to a new team, or gifting a funded wallet. The buyer gets the wallet itself, not a promise.
 
@@ -117,12 +117,12 @@ Rust, `near-sdk` 5.x (5.30.0 at time of writing), `near-contract-standards` 5.30
 - Only the current owner can request signatures; after `buy` or `nft_transfer` the old owner is refused.
 - No signing while listed or while a request is in flight; no listing while in flight.
 - Nonces are strictly sequential; a failed MPC call never consumes a nonce.
-- The contract only ever signs plain ETH transfers it built (no arbitrary payloads, no calldata), so approvals can never be created.
+- The contract only ever signs transactions it built: plain ETH transfers and, since P1 shipped, ERC-20 `transfer` and ERC-721 / ERC-1155 `safeTransferFrom` calls it encodes itself (no arbitrary payloads, no caller calldata), so approvals can never be created.
 - `buy` requires the exact price; refunds overpayment if any; seller paid only when NFT moves.
 - Owner-only state changes require 1 yocto (`assert_one_yocto`).
 - After the final testnet deploy, delete the contract account's full-access keys and commit proof (the `view_access_key_list` output) to `evidence/`. **Warning:** after this the contract can't be upgraded, and redeploying to a new account changes every wallet address. Do it only for the final deploy.
 
-**P1:** ERC-20 transfers, still contract-built: only `transfer(to, amount)` calldata (selector `0xa9059cbb`) to a token address, never `approve`. Requires the clean check to also verify no approvals exist; for safety, P1 only after P0 is solid.
+**P1 (built, together with ERC-721 and ERC-1155 `safeTransferFrom`):** ERC-20 transfers, still contract-built: only `transfer(to, amount)` calldata (selector `0xa9059cbb`) to a token address, never `approve`. Requires the clean check to also verify no approvals exist; for safety, P1 only after P0 is solid.
 
 ## 8. Off-chain pieces
 
